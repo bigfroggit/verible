@@ -99,6 +99,15 @@ ABSL_FLAG(bool, port_declarations_right_align_unpacked_dimensions, false,
           "If true, unpacked dimensions in contexts with enabled alignment are "
           "aligned to the right.");
 
+ABSL_FLAG(bool, align_port_declaration_commas, true,
+          "If true, align trailing commas in port declarations.");
+
+ABSL_FLAG(bool, align_data_declaration_semicolons, true,
+          "If true, align trailing semicolons in data/net declarations.");
+
+ABSL_FLAG(bool, align_module_instance_parens, true,
+          "If true, align parentheses in module instance port connections.");
+
 // -- Deprecated flags. These were typos. Remove after 2022-01-01
 ABSL_RETIRED_FLAG(
     AlignmentPolicy, net_variable_alignment,  //
@@ -135,6 +144,9 @@ void InitializeFromFlags(FormatStyle *style) {
   STYLE_FROM_FLAG(distribution_items_alignment);
   STYLE_FROM_FLAG(port_declarations_right_align_packed_dimensions);
   STYLE_FROM_FLAG(port_declarations_right_align_unpacked_dimensions);
+  STYLE_FROM_FLAG(align_port_declaration_commas);
+  STYLE_FROM_FLAG(align_data_declaration_semicolons);
+  STYLE_FROM_FLAG(align_module_instance_parens);
   STYLE_FROM_FLAG(try_wrap_long_lines);
   STYLE_FROM_FLAG(expand_coverpoints);
   STYLE_FROM_FLAG(compact_indexing_and_selections);

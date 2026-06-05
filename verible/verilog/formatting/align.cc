@@ -15,6 +15,7 @@
 #include "verible/verilog/formatting/align.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <functional>
 #include <limits>
 #include <map>
@@ -64,6 +65,8 @@ using verible::TokenPartitionTree;
 using verible::TreePathFormatter;
 using verible::ValueSaver;
 
+static verible::NonTreeTokensScannerFunction MakeNonTreeColumnScanner(
+    bool align_commas);
 static constexpr AlignmentColumnProperties FlushLeft(true);
 static constexpr AlignmentColumnProperties FlushRight(false);
 
@@ -243,11 +246,22 @@ UnstyledAlignmentCellScannerGenerator() {
 template <class ScannerType>
 std::function<verible::AlignmentCellScannerFunction(
     const FormatStyle
-        &)> static UnstyledAlignmentCellScannerGenerator(const verible::NonTreeTokensScannerFunction
-                                                             &non_tree_column_scanner) {
-  return [non_tree_column_scanner](const FormatStyle &vstyle) {
+        &)> static UnstyledAlignmentCellScannerGenerator(bool align_commas) {
+  return [align_commas](const FormatStyle &vstyle) {
+    auto scanner_func = MakeNonTreeColumnScanner(align_commas);
     return AlignmentCellScannerGenerator<ScannerType>(
-        [vstyle] { return ScannerType(vstyle); }, non_tree_column_scanner);
+        [vstyle] { return ScannerType(vstyle); }, scanner_func);
+  };
+}
+
+template <class ScannerType>
+std::function<verible::AlignmentCellScannerFunction(
+    const FormatStyle &)> static StyledAlignmentCellScannerGenerator() {
+  return [](const FormatStyle &vstyle) {
+    auto scanner_func =
+        MakeNonTreeColumnScanner(vstyle.align_port_declaration_commas);
+    return AlignmentCellScannerGenerator<ScannerType>(
+        [vstyle] { return ScannerType(vstyle); }, scanner_func);
   };
 }
 
@@ -272,7 +286,19 @@ class ActualNamedParameterColumnSchemaScanner
       case NodeEnum::kParenGroup:
         // Second column starts at the open parenthesis.
         if (Context().DirectParentIs(NodeEnum::kParamByName)) {
-          ReserveNewColumn(node, FlushLeft);
+          if (style_.align_module_instance_parens) {
+            // Create subcolumns for left paren, expression, and right paren
+            // to enable alignment of both left and right parentheses
+            auto *paren_column = ReserveNewColumn(node, FlushLeft);
+            if (node.size() >= 3) {
+              ReserveNewColumn(paren_column, *node[0], FlushLeft);  // '('
+              ReserveNewColumn(paren_column, *node[1],
+                               FlushLeft);  // expression
+              ReserveNewColumn(paren_column, *node[2], FlushLeft);  // ')'
+            }
+          } else {
+            ReserveNewColumn(node, FlushLeft);
+          }
         }
         break;
       default:
@@ -303,7 +329,19 @@ class ActualNamedPortColumnSchemaScanner : public VerilogColumnSchemaScanner {
       case NodeEnum::kParenGroup:
         // Second column starts at the open parenthesis.
         if (Context().DirectParentIs(NodeEnum::kActualNamedPort)) {
-          ReserveNewColumn(node, FlushLeft);
+          if (style_.align_module_instance_parens) {
+            // Create subcolumns for left paren, expression, and right paren
+            // to enable alignment of both left and right parentheses
+            auto *paren_column = ReserveNewColumn(node, FlushLeft);
+            if (node.size() >= 3) {
+              ReserveNewColumn(paren_column, *node[0], FlushLeft);  // '('
+              ReserveNewColumn(paren_column, *node[1],
+                               FlushLeft);  // expression
+              ReserveNewColumn(paren_column, *node[2], FlushLeft);  // ')'
+            }
+          } else {
+            ReserveNewColumn(node, FlushLeft);
+          }
         }
         break;
       default:
@@ -476,6 +514,7 @@ class PortDeclarationColumnSchemaScanner : public VerilogColumnSchemaScanner {
         ReserveNewColumn(leaf, FlushLeft, verible::NextSiblingPath(Path()));
         break;
       }
+
       // TODO(b/70310743): Treat "[...:...]" as 5 columns.
       // Treat "[...]" (scalar) as 3 columns.
       // TODO(b/70310743): Treat the ... as a multi-column cell w.r.t.
@@ -538,6 +577,12 @@ class StructUnionMemberColumnSchemaScanner : public VerilogColumnSchemaScanner {
         } else {
           ReserveNewColumn(leaf, FlushLeft);
         }
+        break;
+      }
+
+      // Align trailing semicolons for struct/union members
+      case ';': {
+        ReserveNewColumn(leaf, FlushLeft);
         break;
       }
       default:
@@ -610,6 +655,12 @@ static std::vector<TaggedTokenPartitionRange> GetConsecutiveModuleItemGroups(
           return AlignClassify(AlignmentGroupAction::kIgnore);
         }
         const SyntaxTreeNode &node = verible::SymbolCastToNode(*origin);
+        // Align parameter/localparam
+        if (node.MatchesTag(NodeEnum::kParamDeclaration)) {
+          return AlignClassify(AlignmentGroupAction::kMatch,
+                               AlignableSyntaxSubtype::kParameterDeclaration);
+        }
+
         // Align net/variable declarations.
         if (IsAlignableDeclaration(node)) {
           return AlignClassify(AlignmentGroupAction::kMatch,
@@ -660,6 +711,12 @@ static std::vector<TaggedTokenPartitionRange> GetAlignableStatementGroups(
           return AlignClassify(AlignmentGroupAction::kIgnore);
         }
         const SyntaxTreeNode &node = verible::SymbolCastToNode(*origin);
+        // Align parameter/localparam
+        if (node.MatchesTag(NodeEnum::kParamDeclaration)) {
+          return AlignClassify(AlignmentGroupAction::kMatch,
+                               AlignableSyntaxSubtype::kParameterDeclaration);
+        }
+
         // Align local variable declarations.
         if (IsAlignableDeclaration(node)) {
           return AlignClassify(AlignmentGroupAction::kMatch,
@@ -807,6 +864,14 @@ class DataDeclarationColumnSchemaScanner : public VerilogColumnSchemaScanner {
     }
     const int tag = leaf.get().token_enum();
     switch (tag) {
+      // Align trailing semicolons for data/net/variable declarations
+      case ';': {
+        if (style_.align_data_declaration_semicolons) {
+          ReserveNewColumn(leaf, FlushLeft);
+        }
+        break;
+      }
+
       // TODO(b/70310743): Treat "[...:...]" as 5 columns.
       // Treat "[...]" (scalar) as 3 columns.
       // TODO(b/70310743): Treat the ... as a multi-column cell w.r.t.
@@ -1027,6 +1092,13 @@ class ParameterDeclarationColumnSchemaScanner
                 Context()) &&
             !Context().IsInside(NodeEnum::kActualParameterList)) {
           // FlushLeft vs. Right doesn't matter, this is a single character.
+          ReserveNewColumn(leaf, FlushLeft);
+        }
+        break;
+      }
+
+      case ';': {
+        if (style_.align_data_declaration_semicolons) {
           ReserveNewColumn(leaf, FlushLeft);
         }
         break;
@@ -1299,53 +1371,55 @@ function_from_pointer_to_member(MemberType StructType::*member) {
 using AlignmentHandlerMapType =
     std::map<AlignableSyntaxSubtype, AlignmentGroupHandlers>;
 
-static void non_tree_column_scanner(
-    verible::FormatTokenRange leading_tokens,
-    verible::FormatTokenRange trailing_tokens,
-    verible::ColumnPositionTree *column_entries) {
-  static const SyntaxTreePath kLeadingTokensPath = {
-      kLeadingNonTreeTokenPathIndex};
-  static const SyntaxTreePath kTrailingCommaPath = {
-      kTrailingNonTreeTokenPathIndex, 0};
-  static const SyntaxTreePath kTrailingCommentPath = {
-      kTrailingNonTreeTokenPathIndex, 1};
+static verible::NonTreeTokensScannerFunction MakeNonTreeColumnScanner(
+    bool align_commas) {
+  return [align_commas](verible::FormatTokenRange leading_tokens,
+                        verible::FormatTokenRange trailing_tokens,
+                        verible::ColumnPositionTree *column_entries) {
+    static const SyntaxTreePath kLeadingTokensPath = {
+        kLeadingNonTreeTokenPathIndex};
+    static const SyntaxTreePath kTrailingCommaPath = {
+        kTrailingNonTreeTokenPathIndex, 0};
+    static const SyntaxTreePath kTrailingCommentPath = {
+        kTrailingNonTreeTokenPathIndex, 1};
 
-  VLOG(4) << __FUNCTION__ << "\nleading tokens: "
-          << verible::StringSpanOfTokenRange(leading_tokens)
-          << "\ntrailing tokens: "
-          << verible::StringSpanOfTokenRange(trailing_tokens);
+    VLOG(4) << __FUNCTION__ << "\nleading tokens: "
+            << verible::StringSpanOfTokenRange(leading_tokens)
+            << "\ntrailing tokens: "
+            << verible::StringSpanOfTokenRange(trailing_tokens);
 
-  if (!leading_tokens.empty()) {
-    column_entries->Children().emplace_back(verible::ColumnPositionEntry{
-        kLeadingTokensPath, *leading_tokens.front().token, FlushLeft});
-  }
+    if (!leading_tokens.empty()) {
+      column_entries->Children().emplace_back(verible::ColumnPositionEntry{
+          kLeadingTokensPath, *leading_tokens.front().token, FlushLeft});
+    }
 
-  if (trailing_tokens.empty()) return;
+    if (trailing_tokens.empty()) return;
 
-  const auto separator_it =
-      std::find_if(trailing_tokens.begin(), trailing_tokens.end(),
-                   [](const PreFormatToken &tok) {
-                     return tok.TokenEnum() == ',' || tok.TokenEnum() == ':';
-                   });
+    const auto separator_it =
+        std::find_if(trailing_tokens.begin(), trailing_tokens.end(),
+                     [](const PreFormatToken &tok) {
+                       return tok.TokenEnum() == ',' || tok.TokenEnum() == ':';
+                     });
 
-  auto comment_it = trailing_tokens.begin();
+    auto comment_it = trailing_tokens.begin();
 
-  if (separator_it != trailing_tokens.end()) {
-    AlignmentColumnProperties prop;
-    prop.contains_delimiter = true;
-    const verible::ColumnPositionEntry column{kTrailingCommaPath,
-                                              *separator_it->token, prop};
-    column_entries->Children().emplace_back(column);
+    if (separator_it != trailing_tokens.end()) {
+      AlignmentColumnProperties prop;
+      prop.contains_delimiter = !align_commas;
+      const verible::ColumnPositionEntry column{kTrailingCommaPath,
+                                                *separator_it->token, prop};
+      column_entries->Children().emplace_back(column);
 
-    comment_it = separator_it + 1;
-  }
-  if (comment_it != trailing_tokens.end() &&
-      (comment_it->token->token_enum() == TK_COMMENT_BLOCK ||
-       comment_it->token->token_enum() == TK_EOL_COMMENT)) {
-    const verible::ColumnPositionEntry column{kTrailingCommentPath,
-                                              *comment_it->token, FlushLeft};
-    column_entries->Children().emplace_back(column);
-  }
+      comment_it = separator_it + 1;
+    }
+    if (comment_it != trailing_tokens.end() &&
+        (comment_it->token->token_enum() == TK_COMMENT_BLOCK ||
+         comment_it->token->token_enum() == TK_EOL_COMMENT)) {
+      const verible::ColumnPositionEntry column{kTrailingCommentPath,
+                                                *comment_it->token, FlushLeft};
+      column_entries->Children().emplace_back(column);
+    }
+  };
 }
 
 // Global registry of all known alignment handlers for Verilog.
@@ -1361,26 +1435,26 @@ static const AlignmentHandlerMapType &AlignmentHandlerLibrary() {
             &FormatStyle::module_net_variable_alignment)}},
       {AlignableSyntaxSubtype::kNamedActualParameters,
        {UnstyledAlignmentCellScannerGenerator<
-            ActualNamedParameterColumnSchemaScanner>(non_tree_column_scanner),
+            ActualNamedParameterColumnSchemaScanner>(),
         function_from_pointer_to_member(
             &FormatStyle::named_parameter_alignment)}},
       {AlignableSyntaxSubtype::kNamedActualPorts,
        {UnstyledAlignmentCellScannerGenerator<
-            ActualNamedPortColumnSchemaScanner>(non_tree_column_scanner),
+            ActualNamedPortColumnSchemaScanner>(),
         function_from_pointer_to_member(&FormatStyle::named_port_alignment)}},
       {AlignableSyntaxSubtype::kParameterDeclaration,
-       {UnstyledAlignmentCellScannerGenerator<
-            ParameterDeclarationColumnSchemaScanner>(non_tree_column_scanner),
+       {StyledAlignmentCellScannerGenerator<
+            ParameterDeclarationColumnSchemaScanner>(),
         function_from_pointer_to_member(
             &FormatStyle::formal_parameters_alignment)}},
       {AlignableSyntaxSubtype::kPortDeclaration,
-       {UnstyledAlignmentCellScannerGenerator<
-            PortDeclarationColumnSchemaScanner>(non_tree_column_scanner),
+       {StyledAlignmentCellScannerGenerator<
+            PortDeclarationColumnSchemaScanner>(),
         function_from_pointer_to_member(
             &FormatStyle::port_declarations_alignment)}},
       {AlignableSyntaxSubtype::kStructUnionMember,
        {UnstyledAlignmentCellScannerGenerator<
-            StructUnionMemberColumnSchemaScanner>(non_tree_column_scanner),
+            StructUnionMemberColumnSchemaScanner>(),
         function_from_pointer_to_member(
             &FormatStyle::struct_union_members_alignment)}},
       {AlignableSyntaxSubtype::kClassMemberVariables,
@@ -1405,7 +1479,7 @@ static const AlignmentHandlerMapType &AlignmentHandlerLibrary() {
             &FormatStyle::assignment_statement_alignment)}},
       {AlignableSyntaxSubtype::kEnumListAssignment,
        {UnstyledAlignmentCellScannerGenerator<
-            EnumWithAssignmentsColumnSchemaScanner>(non_tree_column_scanner),
+            EnumWithAssignmentsColumnSchemaScanner>(),
         function_from_pointer_to_member(
             &FormatStyle::enum_assignment_statement_alignment)}},
       {AlignableSyntaxSubtype::kDistItem,
@@ -1458,10 +1532,54 @@ using AlignSyntaxGroupsFunction =
     std::function<std::vector<AlignablePartitionGroup>(
         const TokenPartitionRange &range, const FormatStyle &style)>;
 
+static std::vector<TaggedTokenPartitionRange>
+GetConsecutivePortDeclarationGroups(const TokenPartitionRange &partitions) {
+  return GetPartitionAlignmentSubranges(
+      partitions,
+      [](const TokenPartitionTree &partition)
+          -> AlignedPartitionClassification {
+        const Symbol *origin = partition.Value().Origin();
+        if (origin == nullptr) return {AlignmentGroupAction::kIgnore};
+        const verible::SymbolTag symbol_tag = origin->Tag();
+        if (symbol_tag.kind != verible::SymbolKind::kNode) {
+          return AlignClassify(AlignmentGroupAction::kIgnore);
+        }
+        const SyntaxTreeNode &node = verible::SymbolCastToNode(*origin);
+        if (node.MatchesTag(NodeEnum::kPortDeclaration)) {
+          return AlignClassify(AlignmentGroupAction::kMatch,
+                               AlignableSyntaxSubtype::kPortDeclaration);
+        }
+        return AlignClassify(AlignmentGroupAction::kNoMatch);
+      });
+}
+
+static std::vector<TaggedTokenPartitionRange>
+GetConsecutiveParameterDeclarationGroups(
+    const TokenPartitionRange &partitions) {
+  return GetPartitionAlignmentSubranges(
+      partitions,
+      [](const TokenPartitionTree &partition)
+          -> AlignedPartitionClassification {
+        const Symbol *origin = partition.Value().Origin();
+        if (origin == nullptr) return {AlignmentGroupAction::kIgnore};
+        const verible::SymbolTag symbol_tag = origin->Tag();
+        if (symbol_tag.kind != verible::SymbolKind::kNode) {
+          return AlignClassify(AlignmentGroupAction::kIgnore);
+        }
+        const SyntaxTreeNode &node = verible::SymbolCastToNode(*origin);
+        if (node.MatchesTag(NodeEnum::kParamDeclaration)) {
+          return AlignClassify(AlignmentGroupAction::kMatch,
+                               AlignableSyntaxSubtype::kParameterDeclaration);
+        }
+        return AlignClassify(AlignmentGroupAction::kNoMatch);
+      });
+}
+
 static std::vector<AlignablePartitionGroup> AlignPortDeclarations(
     const TokenPartitionRange &full_range, const FormatStyle &vstyle) {
   return ExtractAlignablePartitionGroups(
-      PartitionBetweenBlankLines(AlignableSyntaxSubtype::kPortDeclaration),
+      &GetConsecutivePortDeclarationGroups,
+      // PartitionBetweenBlankLines(AlignableSyntaxSubtype::kPortDeclaration),
       &IgnoreWithinPortDeclarationPartitionGroup, full_range, vstyle);
 }
 
@@ -1521,7 +1639,8 @@ static std::vector<AlignablePartitionGroup> AlignEnumItems(
 static std::vector<AlignablePartitionGroup> AlignParameterDeclarations(
     const TokenPartitionRange &full_range, const FormatStyle &vstyle) {
   return ExtractAlignablePartitionGroups(
-      PartitionBetweenBlankLines(AlignableSyntaxSubtype::kParameterDeclaration),
+      &GetConsecutiveParameterDeclarationGroups,
+      // PartitionBetweenBlankLines(AlignableSyntaxSubtype::kParameterDeclaration),
       &IgnoreWithinPortDeclarationPartitionGroup, full_range, vstyle);
 }
 

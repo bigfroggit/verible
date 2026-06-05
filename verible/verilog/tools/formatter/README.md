@@ -79,6 +79,16 @@ To pipe from stdin, use '-' as <file>.
       This is a short-term measure to reduce risk-of-harm.); default: false;
     --wrap_end_else_clauses (Split end and else keywords into separate lines);
       default: false;
+    --align_port_declaration_commas (Control whether to align trailing commas
+      in port and parameter declarations, for parameter declarations, also
+      controoled by option 'formal_parameters_alignment');
+      default: true;
+    --align_data_declaration_semicolons (Control whether to align trailing
+      semicolons in data/net declarations);
+      default: true;
+    --align_module_instance_parens (Control whether to align parentheses for
+      module instance ports and parameters);
+      default: true;
 
   Flags from verilog/tools/formatter/verilog_format.cc:
     --failsafe_success (If true, always exit with 0 status, even if there were

@@ -98,6 +98,15 @@ struct FormatStyle : public verible::BasicFormatStyle {
   bool port_declarations_right_align_packed_dimensions = false;
   bool port_declarations_right_align_unpacked_dimensions = false;
 
+  // Control whether to align trailing commas in port declarations
+  bool align_port_declaration_commas = true;
+
+  // Control whether to align trailing semicolons in data/net declarations
+  bool align_data_declaration_semicolons = true;
+
+  // Control whether to align parentheses
+  bool align_module_instance_parens = true;
+
   // At this time line wrap optimization is problematic and risks ruining
   // otherwise reasonable code.  When set to false, this switch will make the
   // formatter give-up and leave code as-is in cases where it would otherwise
