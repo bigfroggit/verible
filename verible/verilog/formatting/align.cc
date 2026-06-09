@@ -867,6 +867,9 @@ class DataDeclarationColumnSchemaScanner : public VerilogColumnSchemaScanner {
       // Align trailing semicolons for data/net/variable declarations
       case ';': {
         if (style_.align_data_declaration_semicolons) {
+          const SyntaxTreePath unified_semicolon_path{2};
+          const ValueSaver<SyntaxTreePath> path_saver(&current_path_,
+                                                      unified_semicolon_path);
           ReserveNewColumn(leaf, FlushLeft);
         }
         break;
@@ -1099,6 +1102,9 @@ class ParameterDeclarationColumnSchemaScanner
 
       case ';': {
         if (style_.align_data_declaration_semicolons) {
+          const SyntaxTreePath unified_semicolon_path{3};
+          const ValueSaver<SyntaxTreePath> path_saver(&current_path_,
+                                                      unified_semicolon_path);
           ReserveNewColumn(leaf, FlushLeft);
         }
         break;
