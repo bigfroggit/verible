@@ -292,9 +292,14 @@ class ActualNamedParameterColumnSchemaScanner
             auto *paren_column = ReserveNewColumn(node, FlushLeft);
             if (node.size() >= 3) {
               ReserveNewColumn(paren_column, *node[0], FlushLeft);  // '('
-              ReserveNewColumn(paren_column, *node[1],
-                               FlushLeft);  // expression
-              ReserveNewColumn(paren_column, *node[2], FlushLeft);  // ')'
+              if (node[1] != nullptr) {
+                ReserveNewColumn(paren_column, *node[1],
+                                 FlushLeft);  // expression
+              }
+              const auto right_paren_path =
+                  GetSubpath(paren_column->Value().path, {2});
+              ReserveNewColumn(paren_column, *node[2], FlushLeft,
+                               right_paren_path);  // ')'
             }
           } else {
             ReserveNewColumn(node, FlushLeft);
@@ -335,9 +340,14 @@ class ActualNamedPortColumnSchemaScanner : public VerilogColumnSchemaScanner {
             auto *paren_column = ReserveNewColumn(node, FlushLeft);
             if (node.size() >= 3) {
               ReserveNewColumn(paren_column, *node[0], FlushLeft);  // '('
-              ReserveNewColumn(paren_column, *node[1],
-                               FlushLeft);  // expression
-              ReserveNewColumn(paren_column, *node[2], FlushLeft);  // ')'
+              if (node[1] != nullptr) {
+                ReserveNewColumn(paren_column, *node[1],
+                                 FlushLeft);  // expression
+              }
+              const auto right_paren_path =
+                  GetSubpath(paren_column->Value().path, {2});
+              ReserveNewColumn(paren_column, *node[2], FlushLeft,
+                               right_paren_path);  // ')'
             }
           } else {
             ReserveNewColumn(node, FlushLeft);
