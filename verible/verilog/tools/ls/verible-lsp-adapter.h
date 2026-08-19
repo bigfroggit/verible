@@ -29,8 +29,10 @@ namespace verilog {
 
 // Given the output of the parser and a lint status, create a diagnostic
 // output to be sent in textDocument/publishDiagnostics notification.
-std::vector<verible::lsp::Diagnostic> CreateDiagnostics(const BufferTracker &,
-                                                        int message_limit);
+std::vector<verible::lsp::Diagnostic> CreateDiagnostics(
+    const BufferTracker &, int message_limit,
+    SymbolTableHandler *symbol_table_handler = nullptr,
+    const verilog::BufferTrackerContainer *parsed_buffers = nullptr);
 
 // Generate code actions from autofixes provided by the linter.
 std::vector<verible::lsp::CodeAction> GenerateLinterCodeActions(
@@ -43,7 +45,9 @@ std::vector<verible::lsp::CodeAction> GenerateCodeActions(
 
 verible::lsp::FullDocumentDiagnosticReport GenerateDiagnosticReport(
     const BufferTracker *tracker,
-    const verible::lsp::DocumentDiagnosticParams &p);
+    const verible::lsp::DocumentDiagnosticParams &p,
+    SymbolTableHandler *symbol_table_handler = nullptr,
+    const verilog::BufferTrackerContainer *parsed_buffers = nullptr);
 
 // Given a parse tree, generate a document symbol outline
 // textDocument/documentSymbol request

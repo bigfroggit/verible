@@ -16,7 +16,10 @@
 #include "verible/verilog/tools/ls/symbol-table-handler.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -30,10 +33,13 @@
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
+#include "symbol-table-handler.h"
 #include "verible/common/lsp/lsp-file-utils.h"
+#include "verible/common/lsp/lsp-protocol-enums.h"
 #include "verible/common/lsp/lsp-protocol.h"
 #include "verible/common/strings/line-column-map.h"
 #include "verible/common/text/symbol.h"
@@ -390,8 +396,18 @@ std::vector<verible::lsp::Location> SymbolTableHandler::FindDefinitionLocation(
   const SymbolTableNode &root = symbol_table_->Root();
 
   const SymbolTableNode *node = ScanSymbolTreeForDefinition(&root, symbol);
-  // Symbol not found
-  if (!node) return {};
+  // Symbol not found in main symbol table, search macro definitions
+  if (!node) {
+    const auto &macro_symbols = symbol_table_->MacroSymbols();
+    auto macro_it = macro_symbols.find(symbol);
+    if (macro_it != macro_symbols.end()) {
+      const std::optional<verible::lsp::Location> location =
+          GetLocationFromSymbolName(macro_it->first,
+                                    macro_it->second.file_origin);
+      if (location) return {*location};
+    }
+    return {};
+  };
   std::vector<verible::lsp::Location> locations;
   const std::optional<verible::lsp::Location> location =
       GetLocationFromSymbolName(*node->Key(), node->Value().file_origin);
@@ -556,4 +572,161 @@ SymbolTableHandler::CreateBufferTrackerListener() {
   };
 }
 
+std::vector<verible::lsp::Diagnostic>
+SymbolTableHandler::FindUndefinedSignalsInBuffer(
+    const verilog::BufferTrackerContainer &parsed_buffers,
+    const std::string &uri) {
+  Prepare();
+  const verilog::BufferTracker *tracker =
+      parsed_buffers.FindBufferTrackerOrNull(uri);
+  if (!tracker) return {};
+
+  const auto current = tracker->current();
+  if (!current) return {};
+
+  std::vector<verible::lsp::Diagnostic> diagnostics;
+  const SymbolTableNode &root = symbol_table_->Root();
+  const verible::TextStructureView &text = current->parser().Data();
+
+  CollectUndefinedSignalsFromNode(root, text, &diagnostics);
+  return diagnostics;
+}
+
+void SymbolTableHandler::CollectUndefinedSignalsFromNode(
+    const SymbolTableNode &node, const verible::TextStructureView &text,
+    std::vector<verible::lsp::Diagnostic> *diagnostics) {
+  for (const auto &ref : node.Value().local_references_to_bind) {
+    if (ref.Empty()) continue;
+    const auto *last_leaf = ref.LastLeaf();
+    if (!last_leaf) continue;
+    if (last_leaf->Value().resolved_symbol == nullptr) {
+      const std::string_view identifier = last_leaf->Value().identifier;
+
+      const auto range = text.GetRangeForText(identifier);
+      diagnostics->push_back(verible::lsp::Diagnostic{
+          .range =
+              {
+                  .start = {.line = range.start.line,
+                            .character = range.start.column},
+                  .end = {.line = range.end.line,
+                          .character = range.end.column},
+              },
+          .severity = verible::lsp::DiagnosticSeverity::kError,
+          .has_severity = true,
+          .message = absl::StrCat("Undefined signal: '", identifier, "'"),
+      });
+    }
+  }
+
+  for (const auto &child : node.Children()) {
+    CollectUndefinedSignalsFromNode(child.second, text, diagnostics);
+  }
+}
+
+std::vector<verible::lsp::Diagnostic>
+SymbolTableHandler::FindUnusedSignalsInBuffer(
+    const verilog::BufferTrackerContainer &parsed_buffers,
+    const std::string &uri) {
+  Prepare();
+
+  const verilog::BufferTracker *tracker =
+      parsed_buffers.FindBufferTrackerOrNull(uri);
+  if (!tracker) return {};
+
+  const auto current = tracker->current();
+  if (!current) return {};
+
+  std::vector<verible::lsp::Diagnostic> diagnostics;
+  const SymbolTableNode &root = symbol_table_->Root();
+  const verible::TextStructureView &text = current->parser().Data();
+
+  // Step 1: Collect all defined signals (kDataNetVariableInstance) in this
+  // buffer
+  std::vector<const SymbolTableNode *> defined_signals;
+  CollectDefinedSignalsFromNode(root, &defined_signals);
+
+  // Step 2: For each defined signal, check if it is referenced anywhere
+  for (const SymbolTableNode *signal_node : defined_signals) {
+    if (!IsSignalReferenced(*signal_node, root)) {
+      std::string_view signal_name = *signal_node->Key();
+
+      // Get the range of the signal definition in source
+      const auto *syntax_origin = signal_node->Value().syntax_origin;
+      if (!syntax_origin) continue;
+
+      const auto range =
+          text.GetRangeForText(verible::StringSpanOfSymbol(*syntax_origin));
+
+      diagnostics.push_back(verible::lsp::Diagnostic{
+          .range =
+              {
+                  .start = {.line = range.start.line,
+                            .character = range.start.column},
+                  .end = {.line = range.end.line,
+                          .character = range.end.column},
+              },
+          .severity = verible::lsp::DiagnosticSeverity::kWarning,
+          .has_severity = true,
+          .message = absl::StrCat("Unused signal: '", signal_name, "'"),
+      });
+    }
+  }
+
+  return diagnostics;
+}
+
+void SymbolTableHandler::CollectDefinedSignalsFromNode(
+    const SymbolTableNode &node,
+    std::vector<const SymbolTableNode *> *defined_signals) {
+  const auto &info = node.Value();
+
+  // Check if this node is a signal definition (wire, reg, logic, etc.)
+  if (info.metatype == SymbolMetaType::kDataNetVariableInstance) {
+    // Exclude ports - they are used externally even if not referenced
+    // externally
+    if (!info.is_port_identifier) {
+      defined_signals->push_back(&node);
+    }
+  }
+
+  // Recursively check child nodes
+  for (const auto &child : node.Children()) {
+    CollectDefinedSignalsFromNode(child.second, defined_signals);
+  }
+}
+
+bool SymbolTableHandler::IsSignalReferenced(const SymbolTableNode &signal_node,
+                                            const SymbolTableNode &root) {
+  const void *signal_addr = &signal_node;
+
+  std::function<bool(const SymbolTableNode &, bool)> check_node =
+      [&](const SymbolTableNode &node, bool inside_module) -> bool {
+    for (const auto &ref : node.Value().local_references_to_bind) {
+      if (ref.Empty()) continue;
+      const auto *last_leaf = ref.LastLeaf();
+      if (last_leaf && last_leaf->Value().resolved_symbol != nullptr) {
+        if (static_cast<const void *>(last_leaf->Value().resolved_symbol) ==
+            signal_addr) {
+          return true;  // Found a reference to this signal
+        }
+      }
+    }
+
+    for (const auto &child : node.Children()) {
+      bool child_inside_module = inside_module;
+      if (child.second.Value().metatype == SymbolMetaType::kModule) {
+        // Descend into module to check its internal references
+        child_inside_module = true;
+      }
+
+      if (child_inside_module || !inside_module) {
+        if (check_node(child.second, child_inside_module)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  return check_node(root, false);
+}
 };  // namespace verilog

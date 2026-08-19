@@ -69,8 +69,10 @@ static const Matcher &InstanceShadowMatcher() {
 static bool isInAllowedNode(const SyntaxTreeContext &ctx) {
   return ctx.IsInside(NodeEnum::kSeqBlock) ||
          ctx.IsInside(NodeEnum::kGenvarDeclaration) ||
-         ctx.IsInside(NodeEnum::kReference);  // ||
-  //  ctx.IsInside(NodeEnum::kModportSimplePort);
+         ctx.IsInside(NodeEnum::kReference) ||
+         ctx.IsInside(NodeEnum::kInstantiationType) ||
+         ctx.IsInside(NodeEnum::kActualNamedPort) ||
+         ctx.IsInside(NodeEnum::kParamByName);
 }
 
 void InstanceShadowRule::HandleSymbol(const verible::Symbol &symbol,
@@ -90,6 +92,14 @@ void InstanceShadowRule::HandleSymbol(const verible::Symbol &symbol,
       context.IsInside(NodeEnum::kModportClockingPortsDeclaration)) {
     return;
   }
+
+  // Type names in module instantiations are references, not declarations
+  if (context.IsInside(NodeEnum::kInstantiationType)) return;
+
+  // Port/parameter connection names are references, not declarations
+  if (context.IsInside(NodeEnum::kActualNamedPort) ||
+      context.IsInside(NodeEnum::kParamByName))
+    return;
 
   // TODO: don't latch on to K&R-Style form in which the same symbol shows
   // up twice.

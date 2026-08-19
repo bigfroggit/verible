@@ -65,7 +65,9 @@ static verible::lsp::Diagnostic ViolationToDiagnostic(
 }
 
 std::vector<verible::lsp::Diagnostic> CreateDiagnostics(
-    const BufferTracker &tracker, int message_limit) {
+    const BufferTracker &tracker, int message_limit,
+    SymbolTableHandler *symbol_table_handler,
+    const verilog::BufferTrackerContainer *parsed_buffers) {
   // Diagnostics should come from the latest state, including all the
   // syntax errors.
   const auto current = tracker.current();
@@ -129,15 +131,34 @@ std::vector<verible::lsp::Diagnostic> CreateDiagnostics(
     if (remaining-- <= 0) break;
     result.emplace_back(ViolationToDiagnostic(v, current->parser().Data()));
   }
+
+  // Append undefined signal diagnostics if symbol-table-handler is provided
+  if (symbol_table_handler && parsed_buffers) {
+    auto undefined_diagnostics =
+        symbol_table_handler->FindUndefinedSignalsInBuffer(*parsed_buffers,
+                                                           current->uri());
+    result.insert(result.end(), undefined_diagnostics.begin(),
+                  undefined_diagnostics.end());
+
+    // Append unused signal diagnostics
+    auto unused_diagnostics = symbol_table_handler->FindUnusedSignalsInBuffer(
+        *parsed_buffers, current->uri());
+    result.insert(result.end(), unused_diagnostics.begin(),
+                  unused_diagnostics.end());
+  }
   return result;
 }
 
 verible::lsp::FullDocumentDiagnosticReport GenerateDiagnosticReport(
     const BufferTracker *tracker,
-    const verible::lsp::DocumentDiagnosticParams &p) {
+    const verible::lsp::DocumentDiagnosticParams &p,
+    SymbolTableHandler *symbol_table_handler,
+    const verilog::BufferTrackerContainer *parsed_buffers) {
   verible::lsp::FullDocumentDiagnosticReport result;
   if (!tracker) return result;
-  result.items = CreateDiagnostics(*tracker, -1);  // no limit in diagnostic msg
+  result.items =
+      CreateDiagnostics(*tracker, -1, symbol_table_handler,
+                        parsed_buffers);  // no limit in diagnostic msg
   return result;
 }
 

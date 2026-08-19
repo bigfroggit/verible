@@ -117,7 +117,8 @@ void VerilogLanguageServer::SetRequestHandlers() {
       "textDocument/diagnostic",
       [this](const verible::lsp::DocumentDiagnosticParams &p) {
         return verilog::GenerateDiagnosticReport(
-            parsed_buffers_.FindBufferTrackerOrNull(p.textDocument.uri), p);
+            parsed_buffers_.FindBufferTrackerOrNull(p.textDocument.uri), p,
+            &symbol_table_handler_, &parsed_buffers_);
       });
 
   dispatcher_.AddRequestHandler(  // Provide autofixes
@@ -275,7 +276,8 @@ void VerilogLanguageServer::SendDiagnostics(
   static constexpr int kDiagnosticLimit = 500;
   params.uri = uri;
   params.diagnostics =
-      verilog::CreateDiagnostics(buffer_tracker, kDiagnosticLimit);
+      verilog::CreateDiagnostics(buffer_tracker, kDiagnosticLimit,
+                                 &symbol_table_handler_, &parsed_buffers_);
   dispatcher_.SendNotification("textDocument/publishDiagnostics", params);
 }
 

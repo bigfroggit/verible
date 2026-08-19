@@ -91,6 +91,23 @@ class SymbolTableHandler {
   // Creates a symbol table for entire project (public: needed in unit-test)
   std::vector<absl::Status> BuildProjectSymbolTable();
 
+  // Finds all undefined signals in the given buffer and returns diagnostics.
+  // An undefined signal is a reference that could not be resolved to a
+  // definition.
+  std::vector<verible::lsp::Diagnostic> FindUndefinedSignalsInBuffer(
+      const verilog::BufferTrackerContainer &parsed_buffers,
+      const std::string &uri);
+
+  // Finds all defined but unused signals in the given buffer and returns
+  // diagnostics. An unused signal is a variable/net that is defined but never
+  // referenced.
+  std::vector<verible::lsp::Diagnostic> FindUnusedSignalsInBuffer(
+      const verilog::BufferTrackerContainer &parsed_buffers,
+      const std::string &uri);
+
+  // Returns a reference to the symbol table (needed by completion handler).
+  const SymbolTable &GetSymbolTable() const { return *symbol_table_; }
+
   // Provide new parsed content for the given path. If "content" is nullptr,
   // opens the given file instead.
   void UpdateFileContent(std::string_view path,
@@ -145,6 +162,23 @@ class SymbolTableHandler {
   void CollectReferences(const SymbolTableNode *context,
                          const SymbolTableNode *definition_node,
                          std::vector<verible::lsp::Location> *references);
+
+  // Internal helper for FindUndefinedSignalsInBuffer that recursively
+  // traverses the symbol table tree collecting unresolved references.
+  void CollectUndefinedSignalsFromNode(
+      const SymbolTableNode &node, const verible::TextStructureView &text,
+      std::vector<verible::lsp::Diagnostic> *diagnostics);
+
+  // Internal helper for FindUnusedSignalsInBuffer that recursively traverses
+  // the symbol table tree collecting all defined signals.
+  void CollectDefinedSignalsFromNode(
+      const SymbolTableNode &node,
+      std::vector<const SymbolTableNode *> *defined_signals);
+
+  // Internal helper that checks if a signal is referenced anywhere in the
+  // buffer.
+  bool IsSignalReferenced(const SymbolTableNode &signal_node,
+                          const SymbolTableNode &root);
 
   // Looks for verible.filelist file down in directory structure and loads
   // data to project. It is meant to be executed once per VerilogProject setup
