@@ -602,6 +602,11 @@ void SymbolTableHandler::CollectUndefinedSignalsFromNode(
     if (last_leaf->Value().resolved_symbol == nullptr) {
       const std::string_view identifier = last_leaf->Value().identifier;
 
+      // Only report diagnostics for identifiers that belong to the current
+      // buffer. The symbol table spans the entire project, so references
+      // from other files must be skipped
+      if (!text.ContainsText(identifier)) continue;
+
       const auto range = text.GetRangeForText(identifier);
       diagnostics->push_back(verible::lsp::Diagnostic{
           .range =
@@ -654,8 +659,11 @@ SymbolTableHandler::FindUnusedSignalsInBuffer(
       const auto *syntax_origin = signal_node->Value().syntax_origin;
       if (!syntax_origin) continue;
 
-      const auto range =
-          text.GetRangeForText(verible::StringSpanOfSymbol(*syntax_origin));
+      const auto signal_span = verible::StringSpanOfSymbol(*syntax_origin);
+      // Only report diagnostics for signals that belong to the current buffer.
+      if (!text.ContainsText(signal_span)) continue;
+
+      const auto range = text.GetRangeForText(signal_span);
 
       diagnostics.push_back(verible::lsp::Diagnostic{
           .range =
