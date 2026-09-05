@@ -49,6 +49,8 @@
 #include "verible/common/util/iterator-adaptors.h"
 #include "verible/common/util/logging.h"
 #include "verible/common/util/range.h"
+#include "verible/common/util/tree-operations.h"
+#include "verible/verilog/CST/verilog-nonterminals.h"
 #include "verible/verilog/analysis/symbol-table.h"
 #include "verible/verilog/analysis/verilog-analyzer.h"
 #include "verible/verilog/analysis/verilog-filelist.h"
@@ -597,30 +599,71 @@ void SymbolTableHandler::CollectUndefinedSignalsFromNode(
     std::vector<verible::lsp::Diagnostic> *diagnostics) {
   for (const auto &ref : node.Value().local_references_to_bind) {
     if (ref.Empty()) continue;
-    const auto *last_leaf = ref.LastLeaf();
-    if (!last_leaf) continue;
-    if (last_leaf->Value().resolved_symbol == nullptr) {
-      const std::string_view identifier = last_leaf->Value().identifier;
+    // Traverse ALL components in the reference tree, not just LastLeaf().
+    // LastLeaf() only returns the last descendant, missing root references
+    // and skipping unresolved named port/parameters children.
+    verible::ApplyPreOrder(
+        *ref.components, [&](const ReferenceComponent &component) {
+          // Only report root (unqualified) references.
+          // Skip named port/parameter references
+          // (kDirectMember, kMemberOfTypeOfParent) - these
+          // are children of instance references and depend
+          // on the module type being resolved. Also skip
+          // kImmediate (out-of-line definitions).
+          if (component.ref_type != ReferenceType::kUnqualified) return;
+          if (component.resolved_symbol != nullptr) return;
 
-      // Only report diagnostics for identifiers that belong to the current
-      // buffer. The symbol table spans the entire project, so references
-      // from other files must be skipped
-      if (!text.ContainsText(identifier)) continue;
+          const std::string_view identifier = component.identifier;
+          if (!text.ContainsText(identifier)) return;
 
-      const auto range = text.GetRangeForText(identifier);
-      diagnostics->push_back(verible::lsp::Diagnostic{
-          .range =
-              {
-                  .start = {.line = range.start.line,
-                            .character = range.start.column},
-                  .end = {.line = range.end.line,
-                          .character = range.end.column},
-              },
-          .severity = verible::lsp::DiagnosticSeverity::kError,
-          .has_severity = true,
-          .message = absl::StrCat("Undefined signal: '", identifier, "'"),
-      });
-    }
+          const auto range = text.GetRangeForText(identifier);
+
+          // Categorize by required_metatype for more precise diagnostics
+          std::string category;
+          switch (component.required_metatype) {
+            case SymbolMetaType::kParameter:
+              category = "parameter";
+              break;
+            case SymbolMetaType::kDataNetVariableInstance:
+              category = "signal";
+              break;
+            case SymbolMetaType::kModule:
+              category = "module";
+              break;
+            case SymbolMetaType::kFunction:
+              category = "function";
+              break;
+            case SymbolMetaType::kTask:
+              category = "task";
+              break;
+            case SymbolMetaType::kClass:
+              category = "class";
+              break;
+            case SymbolMetaType::kPackage:
+              category = "package";
+              break;
+            case SymbolMetaType::kInterface:
+              category = "interface";
+              break;
+            default:
+              category = "symbol";
+              break;
+          }
+
+          diagnostics->push_back(verible::lsp::Diagnostic{
+              .range =
+                  {
+                      .start = {.line = range.start.line,
+                                .character = range.start.column},
+                      .end = {.line = range.end.line,
+                              .character = range.end.column},
+                  },
+              .severity = verible::lsp::DiagnosticSeverity::kError,
+              .has_severity = true,
+              .message =
+                  absl::StrCat("Undefined", category, ": '", identifier, "'"),
+          });
+        });
   }
 
   for (const auto &child : node.Children()) {
@@ -665,6 +708,11 @@ SymbolTableHandler::FindUnusedSignalsInBuffer(
 
       const auto range = text.GetRangeForText(signal_span);
 
+      // Categorize by metatype for more precise diagnostics
+      std::string category =
+          (signal_node->Value().metatype == SymbolMetaType::kParameter)
+              ? "parameter"
+              : "signal";
       diagnostics.push_back(verible::lsp::Diagnostic{
           .range =
               {
@@ -675,7 +723,7 @@ SymbolTableHandler::FindUnusedSignalsInBuffer(
               },
           .severity = verible::lsp::DiagnosticSeverity::kWarning,
           .has_severity = true,
-          .message = absl::StrCat("Unused signal: '", signal_name, "'"),
+          .message = absl::StrCat("Unused ", category, ": '", signal_name, "'"),
       });
     }
   }
@@ -693,48 +741,58 @@ void SymbolTableHandler::CollectDefinedSignalsFromNode(
     // Exclude ports - they are used externally even if not referenced
     // externally
     if (!info.is_port_identifier) {
+      // Exclude module instances - they are not "signals".
+      // Instances have syntax_origin pointing to a kGateInstance node.
+      // Check the syntax tree node tag to distinguish instances from
+      // actual wire/reg/variable declarations.
+      if (info.syntax_origin && info.syntax_origin->Tag().tag ==
+                                    static_cast<int>(NodeEnum::kGateInstance)) {
+        // Skip instances - they should not be checked for "unused"
+      } else {
+        defined_signals->push_back(&node);
+      }
+    }
+
+    // Also collect parameters for unused parameter checking
+    if (info.metatype == SymbolMetaType::kParameter) {
       defined_signals->push_back(&node);
     }
-  }
 
-  // Recursively check child nodes
-  for (const auto &child : node.Children()) {
-    CollectDefinedSignalsFromNode(child.second, defined_signals);
+    // Recursively check child nodes
+    for (const auto &child : node.Children()) {
+      CollectDefinedSignalsFromNode(child.second, defined_signals);
+    }
   }
-}
+};
 
 bool SymbolTableHandler::IsSignalReferenced(const SymbolTableNode &signal_node,
                                             const SymbolTableNode &root) {
   const void *signal_addr = &signal_node;
 
-  std::function<bool(const SymbolTableNode &, bool)> check_node =
-      [&](const SymbolTableNode &node, bool inside_module) -> bool {
+  std::function<bool(const SymbolTableNode &)> check_node =
+      [&](const SymbolTableNode &node) -> bool {
     for (const auto &ref : node.Value().local_references_to_bind) {
       if (ref.Empty()) continue;
-      const auto *last_leaf = ref.LastLeaf();
-      if (last_leaf && last_leaf->Value().resolved_symbol != nullptr) {
-        if (static_cast<const void *>(last_leaf->Value().resolved_symbol) ==
-            signal_addr) {
-          return true;  // Found a reference to this signal
-        }
-      }
+      // Check ALL components in the reference tree, not just LastLeaf().
+      // LastLeaf() misses root references when there are child nodes (e.g.,
+      // for instance references, LastLeaf() returns a named port child, not
+      // the instance name root).
+      bool found = false;
+      verible::ApplyPreOrder(
+          *ref.components, [&](const ReferenceComponent &component) {
+            if (component.resolved_symbol != nullptr &&
+                static_cast<const void *>(component.resolved_symbol) ==
+                    signal_addr) {
+              found = true;
+            }
+          });
+      if (found) return true;
     }
 
     for (const auto &child : node.Children()) {
-      bool child_inside_module = inside_module;
-      if (child.second.Value().metatype == SymbolMetaType::kModule) {
-        // Descend into module to check its internal references
-        child_inside_module = true;
-      }
-
-      if (child_inside_module || !inside_module) {
-        if (check_node(child.second, child_inside_module)) {
-          return true;
-        }
-      }
+      if (check_node(child.second)) return true;
     }
     return false;
   };
-  return check_node(root, false);
-}
+  return check_node(root);
 };  // namespace verilog

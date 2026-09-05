@@ -30,7 +30,10 @@
 #include "verible/common/strings/line-column-map.h"
 #include "verible/common/text/text-structure.h"
 #include "verible/common/text/token-info.h"
+#include "verible/common/text/tree-utils.h"
 #include "verible/common/util/interval.h"
+#include "verible/verilog/CST/declaration.h"
+#include "verible/verilog/CST/verilog-nonterminals.h"
 #include "verible/verilog/analysis/verilog-analyzer.h"
 #include "verible/verilog/analysis/verilog-linter.h"
 #include "verible/verilog/formatting/format-style-init.h"
@@ -62,6 +65,62 @@ static verible::lsp::Diagnostic ViolationToDiagnostic(
       .message = absl::StrCat(violation.reason, " ", v.status->url, "[",
                               v.status->lint_rule_name, "]", fix_msg),
   };
+}
+
+// Finds duplicate module instance names within the same scope in the
+// syntax tree. Returns diagnostics for each duplicate.
+static std::vector<verible::lsp::Diagnostic> FindDuplicateInstanceNames(
+    const verible::TextStructureView &text) {
+  std::vector<verible::lsp::Diagnostic> diagnostics;
+
+  // Find all gate instances in the syntax tree
+  const auto &syntax_tree = text.SyntaxTree();
+  const auto instances =
+      verible::SearchSyntaxTree(*syntax_tree, verilog::NodekGateInstance());
+
+  // Group instances by their parent scope
+  // Use a map from parent node pointer to list of(name, token) pairs
+  std::map<const verible::SyntaxTreeNode *,
+           std::vector<std::pair<std::string_view, verible::TokenInfo>>>
+      scope_instances;
+
+  for (const auto &match : instances) {
+    const auto &instance_node = verible::SymbolCastToNode(*match.match);
+    // Get the instance name
+    const verilog::TokenInfo *name_token =
+        verilog::GetModuleInstanceNameTokenInfoFromGateInstance(instance_node);
+    if (!name_token) continue;
+
+    // Find the parent scope (kGateInstanceList or similar)
+    const auto *parent = match.context.back();
+    if (!parent) continue;
+  }
+
+  // Check for duplicates within each scope
+  for (const auto &[scope, instances_list] : scope_instances) {
+    std::set<std::string_view> seen_names;
+    for (const auto &[name, token] : instances_list) {
+      if (seen_names.count(name) > 0) {
+        // Duplicate found
+        const auto range = text.GetRangeForToken(token);
+        diagnostics.push_back(verible::lsp::Diagnostic {
+          .range =
+              {
+                  .start = {.line = range.start.line,
+                            .character = range.start.column},
+                  .end = {.line = range.end.line,
+                          .character = range.end.column},
+              },
+          .severity = verible::lsp::DiagnosticSeverity::kError,
+          .has_severity = true;
+          .message = absl::StrCat("Duplicate instance name: '", name, "'"),
+        });
+      } else {
+        seen_names.insert(name);
+      }
+    }
+  }
+  return diagnostics;
 }
 
 std::vector<verible::lsp::Diagnostic> CreateDiagnostics(
@@ -146,6 +205,12 @@ std::vector<verible::lsp::Diagnostic> CreateDiagnostics(
     result.insert(result.end(), unused_diagnostics.begin(),
                   unused_diagnostics.end());
   }
+
+  // Append duplicate instance name diagnostics
+  auto duplicate_diagnostics =
+      FindDuplicateInstanceNames(current->parser().Data());
+  result.insert(result.end(), duplicate_diagnostics.begin(),
+                duplicate_diagnostics.end());
   return result;
 }
 

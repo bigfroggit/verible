@@ -183,6 +183,8 @@ cc_library(
         "//verible/common/util:iterator-adaptors",
         "//verible/common/util:logging",
         "//verible/common/util:range",
+        "//verible/common/util:tree-operations",
+        "//verible/verilog/CST:verilog-nonterminals",
         "//verible/verilog/analysis:symbol-table",
         "//verible/verilog/analysis:verilog-analyzer",
         "//verible/verilog/analysis:verilog-filelist",

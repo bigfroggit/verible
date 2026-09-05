@@ -18,6 +18,7 @@
 #include <set>
 #include <sstream>
 #include <string_view>
+#include <type_traits>
 
 #include "verible/common/analysis/citation.h"
 #include "verible/common/analysis/lint-rule-status.h"
@@ -71,8 +72,10 @@ static bool isInAllowedNode(const SyntaxTreeContext &ctx) {
          ctx.IsInside(NodeEnum::kGenvarDeclaration) ||
          ctx.IsInside(NodeEnum::kReference) ||
          ctx.IsInside(NodeEnum::kInstantiationType) ||
+         ctx.IsInside(NodeEnum::kInstantiationBase) ||
          ctx.IsInside(NodeEnum::kActualNamedPort) ||
-         ctx.IsInside(NodeEnum::kParamByName);
+         ctx.IsInside(NodeEnum::kParamByName) ||
+         ctx.IsInside(NodeEnum::kGateInstance);
 }
 
 void InstanceShadowRule::HandleSymbol(const verible::Symbol &symbol,
@@ -100,6 +103,49 @@ void InstanceShadowRule::HandleSymbol(const verible::Symbol &symbol,
   if (context.IsInside(NodeEnum::kActualNamedPort) ||
       context.IsInside(NodeEnum::kParamByName))
     return;
+
+  // Module type names in instantiations are references, not declarations.
+  // When the same module is instantiated multiple times, the module type
+  // name (e.g., MOD_Y) must not be reported as shadowing.
+  // kInstantiationBase is the common parent of kInstantiationType and
+  // kGateInstanceList, covering the entire instantiation statement.
+  // This is a preventive double-guard in addition to the existing
+  // kInstantiationType check at line 97, covering CST edge cases where
+  // the kInstantiationType wrapper may be incomplete.
+  if (context.IsInside(NodeEnum::kInstantiationBase)) return;
+
+  // Parameter/localparam declarations don't shadow other symbols
+  if (context.IsInside(NodeEnum::kParamDeclaration)) return;
+
+  // Non-ANSI port style: body declarations (e.g., "reg data") with same
+  // name as a port declaration (e.g., "output data") is not shadowing.
+  // In non-ANSI style, the port is declared in the port list, and the
+  // actual signal type is declared separately in the module body.
+  // Check if a port with the same name exists in an overlapping scope.
+  if (context.IsInside(NodeEnum::kNetDeclaration) ||
+      context.IsInside(NodeEnum::kDataDeclaration) ||
+      context.IsInside(NodeEnum::kRegisterVariable) ||
+      context.IsInside(NodeEnum::kVariableDeclarationAssignment)) {
+    const auto &label = SymbolCastToLeaf(*labels[0].match);
+    // Search upward through the context for port declarations
+    // with the same name
+    for (const auto *ctx_node : reversed_view(context)) {
+      for (const verible::SymbolPtr &child : ctx_node->children()) {
+        if (!child) continue;
+        const auto overlapping_labels = FindAllSymbolIdentifierLeafs(*child);
+        for (const auto &omatch : overlapping_labels) {
+          if (omatch.context.IsInside(NodeEnum::kModulePortDeclaration) ||
+              omatch.context.IsInside(NodeEnum::kPortDeclaration) ||
+              omatch.context.IsInside(NodeEnum::kPort)) {
+            const auto &overlapping_label = SymbolCastToLeaf(*omatch.match);
+            if (overlapping_label.get().text() == label.get().text()) {
+              return;  // Not shadowing - non-ANSI port declaration
+            }
+          }
+        }
+      }
+    }
+  }
 
   // TODO: don't latch on to K&R-Style form in which the same symbol shows
   // up twice.
