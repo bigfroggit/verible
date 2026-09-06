@@ -28,9 +28,9 @@
 #include <ostream>
 #include <utility>
 
-#include "absl/base/config.h"  // NOLINT for ABSL_LTS_RELEASE_VERSION
 #include "absl/container/fixed_array.h"
 #include "absl/log/log.h"
+#include "absl/log/vlog_is_on.h"
 #include "verible/common/formatting/basic-format-style.h"
 #include "verible/common/formatting/layout-optimizer-internal.h"
 #include "verible/common/formatting/token-partition-tree.h"
@@ -40,11 +40,6 @@
 #include "verible/common/util/logging.h"
 #include "verible/common/util/tree-operations.h"
 #include "verible/common/util/value-saver.h"
-
-#if ABSL_LTS_RELEASE_VERSION > 20240200
-// https://github.com/chipsalliance/verible/issues/2336
-#include "absl/log/vlog_is_on.h"
-#endif
 
 namespace verible {
 
@@ -130,7 +125,7 @@ std::ostream &operator<<(std::ostream &stream, LayoutType type) {
     case LayoutType::kStack:
       return stream << "stack";
   }
-  LOG(WARNING) << "Unknown layout type: " << int(type);
+  LOG(WARNING) << "Unknown layout type: " << static_cast<int>(type);
   return stream << "???";
 }
 
@@ -232,7 +227,8 @@ LayoutFunction LayoutFunctionFactory::Line(const UnwrappedLine &uwline) const {
   }
   return LayoutFunction{
       {0, std::move(layout), span,
-       float((span - style_.column_limit) * style_.over_column_limit_penalty),
+       static_cast<float>((span - style_.column_limit) *
+                          style_.over_column_limit_penalty),
        style_.over_column_limit_penalty},
   };
 }

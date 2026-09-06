@@ -28,6 +28,7 @@
 #include <string_view>
 #include <vector>
 
+#include "absl/log/die_if_null.h"
 #include "absl/strings/str_cat.h"
 #include "gtest/gtest.h"
 #include "verible/common/analysis/syntax-tree-search-test-utils.h"
@@ -540,10 +541,9 @@ TEST(FunctionPort, GetDirection) {
 
           std::vector<TreeSearchMatch> directions;
           for (const auto &port : ports) {
-            const auto *direction =
+            const verible::SyntaxTreeLeaf *direction =
                 GetDirectionFromPortDeclaration(*port.match);
-            directions.emplace_back(
-                TreeSearchMatch{(const verible::Symbol *)direction, {}});
+            directions.emplace_back(TreeSearchMatch{direction, {}});
           }
           return directions;
         });

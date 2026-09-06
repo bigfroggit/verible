@@ -26,6 +26,7 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_set.h"
 #include "absl/hash/hash.h"
+#include "absl/log/die_if_null.h"
 #include "absl/strings/str_cat.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
@@ -87,6 +88,7 @@ class KytheFactsExtractor {
     using AutoPop = base_type::AutoPop;
 
     // returns the top VName of the stack
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method)
     const VName &top() const { return *ABSL_DIE_IF_NULL(base_type::top()); }
   };
 

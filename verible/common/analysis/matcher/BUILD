@@ -21,7 +21,7 @@ cc_library(
         "//verible/common/text:symbol",
         "//verible/common/text:tree-utils",
         "//verible/common/util:container-util",
-        "//verible/common/util:logging",
+        "@abseil-cpp//absl/log:die_if_null",
     ],
 )
 
@@ -32,7 +32,6 @@ cc_library(
     deps = [
         ":bound-symbol-manager",
         "//verible/common/text:symbol",
-        "@abseil-cpp//absl/types:optional",
     ],
 )
 

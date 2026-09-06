@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/log/die_if_null.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/strip.h"
@@ -92,11 +93,12 @@ class IndexingFactsTreeExtractor : public verible::TreeContextVisitor {
         Anchor(base));
   }
 
-  void Visit(const SyntaxTreeLeaf &leaf) final;
-  void Visit(const SyntaxTreeNode &node) final;
-
   const IndexingFactNode &Root() const { return root_; }
   IndexingFactNode TakeRoot() { return std::move(root_); }
+
+ protected:
+  void Visit(const SyntaxTreeLeaf &leaf) final;
+  void Visit(const SyntaxTreeNode &node) final;
 
  private:  // methods
   // Extracts facts from module, intraface and program declarations.

@@ -15,11 +15,33 @@
 #ifndef VERIBLE_VERILOG_FORMATTING_FORMAT_STYLE_H_
 #define VERIBLE_VERILOG_FORMATTING_FORMAT_STYLE_H_
 
+#include <iosfwd>
+#include <string>
+#include <string_view>
+
 #include "verible/common/formatting/align.h"
 #include "verible/common/formatting/basic-format-style.h"
 
 namespace verilog {
 namespace formatter {
+
+// Control what breaks alignment groups for module items, statements,
+// and class items.
+enum class AlignmentGroupBoundary {
+  // No additional group splitting (default, current behavior).
+  kNone,
+  // Blank lines break alignment groups.
+  kBlankLines,
+  // Separator comment lines (e.g., // ----) break alignment groups.
+  kSeparatorComments,
+  // Both blank lines and separator comments break alignment groups.
+  kBlankLinesAndSeparatorComments,
+};
+
+std::ostream &operator<<(std::ostream &, AlignmentGroupBoundary);
+bool AbslParseFlag(std::string_view text, AlignmentGroupBoundary *boundary,
+                   std::string *error);
+std::string AbslUnparseFlag(const AlignmentGroupBoundary &boundary);
 
 // Style parameters that are specific to Verilog formatter
 struct FormatStyle : public verible::BasicFormatStyle {
@@ -30,11 +52,9 @@ struct FormatStyle : public verible::BasicFormatStyle {
 
   FormatStyle(const FormatStyle &) = default;
 
-  /*
-   * InitializeFromFlags() [format_style_init.h] provides flags that are
-   * named like these fields and allow configuration on the command line.
-   * So field foo here can be configured with flag --foo
-   */
+  // InitializeFromFlags() [format-style-init.cc] provides flags that are
+  // named like these fields and allow configuration on the command line.
+  // So field foo here can be configured with flag --foo.
 
   // TODO(hzeller): some of these are plural, some singular. Come up with
   // a consistent scheme.
@@ -64,24 +84,36 @@ struct FormatStyle : public verible::BasicFormatStyle {
   AlignmentPolicy named_port_alignment = AlignmentPolicy::kAlign;
 
   // Control how module-local net/variable declarations are formatted.
+  // Applies in module, generate, interface, and package bodies.
   // Internal tests assume these are forced to kAlign.
   AlignmentPolicy module_net_variable_alignment = AlignmentPolicy::kAlign;
 
   // Control how various assignment statements should be aligned.
+  // Applies in module, generate, interface, and package bodies.
   // This covers: continuous assignment statements,
   // blocking, and nonblocking assignments.
   // Internal tests assume these are forced to kAlign.
   AlignmentPolicy assignment_statement_alignment = AlignmentPolicy::kAlign;
 
-  // Assignment within enumerations.
+  // Control how assignments in enumerations should be aligned.
   AlignmentPolicy enum_assignment_statement_alignment = AlignmentPolicy::kAlign;
 
   // Control indentation amount for formal parameter declarations.
   IndentationStyle formal_parameters_indentation = IndentationStyle::kWrap;
 
-  // Control how formal parameters in modules/interfaces/classes are formatted.
+  // Control how formal parameters in module/interface/class headers
+  // (inside #(...)) are formatted.  For parameter/localparam
+  // declarations in module, generate, interface, and package bodies,
+  // see parameter_declaration_alignment.
   // Internal tests assume these are forced to kAlign.
   AlignmentPolicy formal_parameters_alignment = AlignmentPolicy::kAlign;
+
+  // Control how parameter/localparam declarations are formatted.
+  // Applies in module, generate, interface, and package bodies.
+  // Class body parameter declarations are not affected.
+  // For formal parameters in #(...) headers, see formal_parameters_alignment.
+  // Internal tests assume these are forced to kAlign.
+  AlignmentPolicy parameter_declaration_alignment = AlignmentPolicy::kAlign;
 
   // Control how class member variables are formatted.
   // Internal tests assume these are forced to kAlign.
@@ -106,6 +138,10 @@ struct FormatStyle : public verible::BasicFormatStyle {
 
   // Control whether to align parentheses
   bool align_module_instance_parens = true;
+  // Control what breaks alignment groups for module items, statements,
+  // and class items.
+  AlignmentGroupBoundary alignment_group_boundary =
+      AlignmentGroupBoundary::kNone;
 
   // At this time line wrap optimization is problematic and risks ruining
   // otherwise reasonable code.  When set to false, this switch will make the
@@ -121,7 +157,7 @@ struct FormatStyle : public verible::BasicFormatStyle {
   // Split with a \n end and else clauses
   bool wrap_end_else_clauses = false;
 
-  // -- Note: when adding new fields, add them in format_style_init.cc
+  // -- Note: When adding new fields, add them in format-style-init.cc
 
   // TODO(fangism): introduce the following knobs:
   //
@@ -156,12 +192,16 @@ struct FormatStyle : public verible::BasicFormatStyle {
                : indentation_spaces;
   }
 
+  // -- Note: When adding a new AlignmentPolicy field, add it here
+  // and to InitializeFromFlags in format-style-init.cc.
   void ApplyToAllAlignmentPolicies(AlignmentPolicy policy) {
     port_declarations_alignment = policy;
+    struct_union_members_alignment = policy;
     named_parameter_alignment = policy;
     named_port_alignment = policy;
     module_net_variable_alignment = policy;
     formal_parameters_alignment = policy;
+    parameter_declaration_alignment = policy;
     class_member_variable_alignment = policy;
     case_items_alignment = policy;
     assignment_statement_alignment = policy;

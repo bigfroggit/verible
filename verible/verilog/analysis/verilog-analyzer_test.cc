@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/log/die_if_null.h"
 #include "absl/status/status.h"
 #include "absl/strings/match.h"
 #include "gmock/gmock.h"
@@ -849,6 +850,7 @@ TEST(VerilogAnalyzerExpandsMacroArgsTest, MultipleMacroCalls) {
 }
 
 // Helper class for testing internals.
+// NOLINTNEXTLINE(misc-multiple-inheritance)
 class VerilogAnalyzerInternalsTest : public testing::Test,
                                      public VerilogAnalyzer {
  public:

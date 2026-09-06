@@ -62,6 +62,7 @@ cc_library(
         "//verible/verilog/analysis:verilog-analyzer",
         "//verible/verilog/analysis:verilog-linter",
         "//verible/verilog/analysis:verilog-linter-configuration",
+        "@abseil-cpp//absl/log:die_if_null",
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
     ],
@@ -191,7 +192,6 @@ cc_library(
         "//verible/verilog/analysis:verilog-analyzer",
         "//verible/verilog/analysis:verilog-filelist",
         "//verible/verilog/analysis:verilog-project",
-        "@abseil-cpp//absl/base:config",
         "@abseil-cpp//absl/container:flat_hash_map",
         "@abseil-cpp//absl/flags:flag",
         "@abseil-cpp//absl/log",
@@ -201,7 +201,6 @@ cc_library(
         "@abseil-cpp//absl/strings:str_format",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/time",
-        "@abseil-cpp//absl/types:optional",
     ],
 )
 

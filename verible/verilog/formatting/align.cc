@@ -22,6 +22,8 @@
 #include <string_view>
 #include <vector>
 
+#include "absl/log/die_if_null.h"
+#include "absl/strings/ascii.h"
 #include "verible/common/formatting/align.h"
 #include "verible/common/formatting/format-token.h"
 #include "verible/common/formatting/token-partition-tree.h"
@@ -94,6 +96,58 @@ static bool TokensHaveParenthesis(const T &tokens) {
                      [](const typename T::value_type &token) {
                        return token.TokenEnum() == '(';
                      });
+}
+
+// Returns true if the partition contains a separator comment line.
+// A separator comment is an EOL comment whose body contains a run of 4 or
+// more consecutive identical "divider" characters, where a divider character
+// is any non-alphanumeric, non-whitespace character (e.g. '-', '=', '*',
+// '#', '/').  The run may be surrounded by other text, so both a bare rule
+// and a captioned one are recognised.  Examples: "// ----", "// ====",
+// "/////////////////////", "// ------ section heading ------".
+static bool IsSeparatorComment(const TokenPartitionTree &partition) {
+  const auto &uwline = partition.Value();
+  const auto token_range = uwline.TokensRange();
+  if (token_range.empty()) return false;
+
+  constexpr int kMinRunLength = 4;
+  for (const auto &ftoken : token_range) {
+    if (ftoken.TokenEnum() !=
+        static_cast<int>(verilog_tokentype::TK_EOL_COMMENT)) {
+      continue;
+    }
+
+    std::string_view text = ftoken.Text();
+    // Strip leading "//"
+    if (text.size() < 2 || text[0] != '/' || text[1] != '/') continue;
+    const std::string_view body = text.substr(2);
+
+    // Look for a run of kMinRunLength or more consecutive identical divider
+    // characters anywhere in the comment body.
+    int run = 0;
+    char prev = '\0';
+    for (const char ch : body) {
+      const bool is_divider =
+          !absl::ascii_isalnum(ch) && !absl::ascii_isspace(ch);
+      if (is_divider && ch == prev) {
+        if (++run >= kMinRunLength) return true;
+      } else {
+        run = is_divider ? 1 : 0;
+        prev = ch;
+      }
+    }
+  }
+  return false;
+}
+
+static bool BlankLinesBreakGroups(AlignmentGroupBoundary b) {
+  return b == AlignmentGroupBoundary::kBlankLines ||
+         b == AlignmentGroupBoundary::kBlankLinesAndSeparatorComments;
+}
+
+static bool SeparatorCommentsBreakGroups(AlignmentGroupBoundary b) {
+  return b == AlignmentGroupBoundary::kSeparatorComments ||
+         b == AlignmentGroupBoundary::kBlankLinesAndSeparatorComments;
 }
 
 static bool IgnoreCommentsAndPreprocessingDirectives(
@@ -273,6 +327,7 @@ class ActualNamedParameterColumnSchemaScanner
   explicit ActualNamedParameterColumnSchemaScanner(const FormatStyle &style)
       : VerilogColumnSchemaScanner(style) {}
 
+ protected:
   void Visit(const SyntaxTreeNode &node) final {
     auto tag = NodeEnum(node.Tag().tag);
     VLOG(2) << __FUNCTION__ << ", node: " << tag << " at "
@@ -321,6 +376,7 @@ class ActualNamedPortColumnSchemaScanner : public VerilogColumnSchemaScanner {
   explicit ActualNamedPortColumnSchemaScanner(const FormatStyle &style)
       : VerilogColumnSchemaScanner(style) {}
 
+ protected:
   void Visit(const SyntaxTreeNode &node) final {
     auto tag = NodeEnum(node.Tag().tag);
     VLOG(2) << __FUNCTION__ << ", node: " << tag << " at "
@@ -369,6 +425,7 @@ class PortDeclarationColumnSchemaScanner : public VerilogColumnSchemaScanner {
   explicit PortDeclarationColumnSchemaScanner(const FormatStyle &style)
       : VerilogColumnSchemaScanner(style) {}
 
+ protected:
   void Visit(const SyntaxTreeNode &node) final {
     auto tag = NodeEnum(node.Tag().tag);
     VLOG(2) << __FUNCTION__ << ", node: " << tag << " at "
@@ -546,6 +603,7 @@ class StructUnionMemberColumnSchemaScanner : public VerilogColumnSchemaScanner {
   explicit StructUnionMemberColumnSchemaScanner(const FormatStyle &style)
       : VerilogColumnSchemaScanner(style) {}
 
+ protected:
   void Visit(const SyntaxTreeNode &node) final {
     auto tag = NodeEnum(node.Tag().tag);
     VLOG(2) << __FUNCTION__ << ", node: " << tag << " at "
@@ -629,7 +687,9 @@ enum class AlignableSyntaxSubtype {
   kDontCare = 0,
   kNamedActualParameters,
   kNamedActualPorts,
-  kParameterDeclaration,
+  kParameterDeclaration,      // formal parameter list (#(...))
+  kBodyParameterDeclaration,  // parameter/localparam in module/generate/
+                              //   package/interface body
   kPortDeclaration,
   kStructUnionMember,
   kDataDeclaration,  // net/variable declarations
@@ -652,23 +712,30 @@ static AlignedPartitionClassification AlignClassify(
 }
 
 static std::vector<TaggedTokenPartitionRange> GetConsecutiveModuleItemGroups(
-    const TokenPartitionRange &partitions) {
+    const TokenPartitionRange &partitions, AlignmentGroupBoundary boundary) {
   VLOG(2) << __FUNCTION__;
   return GetPartitionAlignmentSubranges(
       partitions,  //
-      [](const TokenPartitionTree &partition)
+      [boundary](const TokenPartitionTree &partition)
           -> AlignedPartitionClassification {
         const Symbol *origin = partition.Value().Origin();
-        if (origin == nullptr) return {AlignmentGroupAction::kIgnore};
+        if (origin == nullptr) {
+          if (SeparatorCommentsBreakGroups(boundary) &&
+              IsSeparatorComment(partition)) {
+            return {AlignmentGroupAction::kNoMatch};
+          }
+          return {AlignmentGroupAction::kIgnore};
+        }
         const verible::SymbolTag symbol_tag = origin->Tag();
         if (symbol_tag.kind != verible::SymbolKind::kNode) {
           return AlignClassify(AlignmentGroupAction::kIgnore);
         }
         const SyntaxTreeNode &node = verible::SymbolCastToNode(*origin);
-        // Align parameter/localparam
+        // Align body-level parameter/localparam declarations.
         if (node.MatchesTag(NodeEnum::kParamDeclaration)) {
-          return AlignClassify(AlignmentGroupAction::kMatch,
-                               AlignableSyntaxSubtype::kParameterDeclaration);
+          return AlignClassify(
+              AlignmentGroupAction::kMatch,
+              AlignableSyntaxSubtype::kBodyParameterDeclaration);
         }
 
         // Align net/variable declarations.
@@ -686,14 +753,20 @@ static std::vector<TaggedTokenPartitionRange> GetConsecutiveModuleItemGroups(
 }
 
 static std::vector<TaggedTokenPartitionRange> GetConsecutiveClassItemGroups(
-    const TokenPartitionRange &partitions) {
+    const TokenPartitionRange &partitions, AlignmentGroupBoundary boundary) {
   VLOG(2) << __FUNCTION__;
   return GetPartitionAlignmentSubranges(
       partitions,  //
-      [](const TokenPartitionTree &partition)
+      [boundary](const TokenPartitionTree &partition)
           -> AlignedPartitionClassification {
         const Symbol *origin = partition.Value().Origin();
-        if (origin == nullptr) return {AlignmentGroupAction::kIgnore};
+        if (origin == nullptr) {
+          if (SeparatorCommentsBreakGroups(boundary) &&
+              IsSeparatorComment(partition)) {
+            return {AlignmentGroupAction::kNoMatch};
+          }
+          return {AlignmentGroupAction::kIgnore};
+        }
         const verible::SymbolTag symbol_tag = origin->Tag();
         if (symbol_tag.kind != verible::SymbolKind::kNode) {
           return {AlignmentGroupAction::kIgnore};
@@ -708,14 +781,20 @@ static std::vector<TaggedTokenPartitionRange> GetConsecutiveClassItemGroups(
 }
 
 static std::vector<TaggedTokenPartitionRange> GetAlignableStatementGroups(
-    const TokenPartitionRange &partitions) {
+    const TokenPartitionRange &partitions, AlignmentGroupBoundary boundary) {
   VLOG(2) << __FUNCTION__;
   return GetPartitionAlignmentSubranges(
       partitions,  //
-      [](const TokenPartitionTree &partition)
+      [boundary](const TokenPartitionTree &partition)
           -> AlignedPartitionClassification {
         const Symbol *origin = partition.Value().Origin();
-        if (origin == nullptr) return {AlignmentGroupAction::kIgnore};
+        if (origin == nullptr) {
+          if (SeparatorCommentsBreakGroups(boundary) &&
+              IsSeparatorComment(partition)) {
+            return {AlignmentGroupAction::kNoMatch};
+          }
+          return {AlignmentGroupAction::kIgnore};
+        }
         const verible::SymbolTag symbol_tag = origin->Tag();
         if (symbol_tag.kind != verible::SymbolKind::kNode) {
           return AlignClassify(AlignmentGroupAction::kIgnore);
@@ -760,6 +839,7 @@ class DataDeclarationColumnSchemaScanner : public VerilogColumnSchemaScanner {
   explicit DataDeclarationColumnSchemaScanner(const FormatStyle &style)
       : VerilogColumnSchemaScanner(style) {}
 
+ protected:
   void Visit(const SyntaxTreeNode &node) final {
     auto tag = NodeEnum(node.Tag().tag);
     VLOG(2) << __FUNCTION__ << ", node: " << tag << " at "
@@ -827,7 +907,7 @@ class DataDeclarationColumnSchemaScanner : public VerilogColumnSchemaScanner {
       }
       case NodeEnum::kDimensionSlice:
       case NodeEnum::kDimensionAssociativeType: {
-        // all of these cases cover packed and unpacked dimensions
+        // All of these cases cover packed and unpacked dimensions
         ReserveNewColumn(node, FlushLeft);
         break;
       }
@@ -918,6 +998,7 @@ class ClassPropertyColumnSchemaScanner : public VerilogColumnSchemaScanner {
   explicit ClassPropertyColumnSchemaScanner(const FormatStyle &style)
       : VerilogColumnSchemaScanner(style) {}
 
+ protected:
   void Visit(const SyntaxTreeNode &node) final {
     auto tag = NodeEnum(node.Tag().tag);
     VLOG(2) << __FUNCTION__ << ", node: " << tag << " at "
@@ -951,7 +1032,6 @@ class ClassPropertyColumnSchemaScanner : public VerilogColumnSchemaScanner {
         CHECK_EQ(node.size(), 5);
         auto *column = ABSL_DIE_IF_NULL(ReserveNewColumn(node, FlushLeft));
 
-        SyntaxTreePath np;
         ReserveNewColumn(column, *node[0], FlushLeft);  // '['
 
         auto *value_subcolumn =
@@ -985,15 +1065,15 @@ class ClassPropertyColumnSchemaScanner : public VerilogColumnSchemaScanner {
   }
 };
 
-// This class marks up token-subranges in formal parameter declarations for
-// alignment.
-// e.g. "localparam int Width = 5;"
+// This class marks up token-subranges in formal and body-level parameter
+// declarations for alignment.  e.g. "localparam int Width = 5;"
 class ParameterDeclarationColumnSchemaScanner
     : public VerilogColumnSchemaScanner {
  public:
   explicit ParameterDeclarationColumnSchemaScanner(const FormatStyle &style)
       : VerilogColumnSchemaScanner(style) {}
 
+ protected:
   void Visit(const SyntaxTreeNode &node) final {
     auto tag = NodeEnum(node.Tag().tag);
     VLOG(2) << __FUNCTION__ << ", node: " << tag << " at "
@@ -1060,7 +1140,7 @@ class ParameterDeclarationColumnSchemaScanner
         break;
       }
 
-      // Sometimes the parameter indentifier which is of token SymbolIdentifier
+      // Sometimes the parameter identifier which is of token SymbolIdentifier
       // can appear at different paths depending on the parameter type. Make
       // them aligned so they fall under the same column.
       case verilog_tokentype::SymbolIdentifier: {
@@ -1089,7 +1169,7 @@ class ParameterDeclarationColumnSchemaScanner
         break;
       }
 
-      // Align packed and unpacked dimenssions
+      // Align packed and unpacked dimensions
       case '[': {
         if (verilog::analysis::ContextIsInsideDeclarationDimensions(
                 Context()) &&
@@ -1145,6 +1225,7 @@ class CaseItemColumnSchemaScanner : public VerilogColumnSchemaScanner {
          NodeEnum::kGenerateCaseItem, NodeEnum::kDefaultItem});
   }
 
+ protected:
   void Visit(const SyntaxTreeNode &node) final {
     auto tag = NodeEnum(node.Tag().tag);
     VLOG(2) << __FUNCTION__ << ", node: " << tag << " at "
@@ -1206,6 +1287,7 @@ class AssignmentColumnSchemaScanner : public VerilogColumnSchemaScanner {
   explicit AssignmentColumnSchemaScanner(const FormatStyle &style)
       : VerilogColumnSchemaScanner(style) {}
 
+ protected:
   void Visit(const SyntaxTreeNode &node) final {
     auto tag = NodeEnum(node.Tag().tag);
     VLOG(2) << __FUNCTION__ << ", node: " << tag << " at "
@@ -1264,6 +1346,7 @@ class EnumWithAssignmentsColumnSchemaScanner
   explicit EnumWithAssignmentsColumnSchemaScanner(const FormatStyle &style)
       : VerilogColumnSchemaScanner(style) {}
 
+ protected:
   void Visit(const SyntaxTreeNode &node) final {
     auto tag = NodeEnum(node.Tag().tag);
     VLOG(2) << __FUNCTION__ << ", node: " << tag << " at "
@@ -1308,6 +1391,7 @@ class DistItemColumnSchemaScanner : public VerilogColumnSchemaScanner {
   explicit DistItemColumnSchemaScanner(const FormatStyle &style)
       : VerilogColumnSchemaScanner(style) {}
 
+ protected:
   void Visit(const SyntaxTreeNode &node) final {
     const auto tag = NodeEnum(node.Tag().tag);
     switch (tag) {
@@ -1463,6 +1547,11 @@ static const AlignmentHandlerMapType &AlignmentHandlerLibrary() {
             ParameterDeclarationColumnSchemaScanner>(),
         function_from_pointer_to_member(
             &FormatStyle::formal_parameters_alignment)}},
+      {AlignableSyntaxSubtype::kBodyParameterDeclaration,
+       {UnstyledAlignmentCellScannerGenerator<
+            ParameterDeclarationColumnSchemaScanner>(non_tree_column_scanner),
+        function_from_pointer_to_member(
+            &FormatStyle::parameter_declaration_alignment)}},
       {AlignableSyntaxSubtype::kPortDeclaration,
        {StyledAlignmentCellScannerGenerator<
             PortDeclarationColumnSchemaScanner>(),
@@ -1621,21 +1710,56 @@ static std::vector<AlignablePartitionGroup> AlignActualNamedPorts(
       &IgnoreWithinActualNamedPortPartitionGroup, full_range, vstyle);
 }
 
+// Extracts alignable partition groups, optionally pre-splitting the range at
+// blank lines when the alignment_group_boundary style setting requires it.
+static std::vector<AlignablePartitionGroup>
+ExtractAlignablePartitionGroupsWithBoundary(
+    const std::function<std::vector<TaggedTokenPartitionRange>(
+        const TokenPartitionRange &)> &group_extractor,
+    const verible::IgnoreAlignmentRowPredicate &ignore_group_predicate,
+    const TokenPartitionRange &full_range, const FormatStyle &vstyle) {
+  if (!BlankLinesBreakGroups(vstyle.alignment_group_boundary)) {
+    return ExtractAlignablePartitionGroups(
+        group_extractor, ignore_group_predicate, full_range, vstyle);
+  }
+  // Pre-split at blank lines, then apply grouping to each sub-range.
+  std::vector<AlignablePartitionGroup> all_groups;
+  const auto sub_ranges =
+      verible::GetSubpartitionsBetweenBlankLines(full_range);
+  for (const auto &sub_range : sub_ranges) {
+    auto groups = ExtractAlignablePartitionGroups(
+        group_extractor, ignore_group_predicate, sub_range, vstyle);
+    for (const auto &group : groups) {
+      all_groups.push_back(group);
+    }
+  }
+  return all_groups;
+}
+
 static std::vector<AlignablePartitionGroup> AlignModuleItems(
     const TokenPartitionRange &full_range, const FormatStyle &vstyle) {
-  // Currently, this only handles data/net/variable declarations.
-  // TODO(b/161814377): align continuous assignments
-  return ExtractAlignablePartitionGroups(
-      &GetConsecutiveModuleItemGroups,
-      &IgnoreCommentsAndPreprocessingDirectives, full_range, vstyle);
+  // Applies to module/interface, generate, and package item lists.
+  // Handles data/net/variable declarations, parameter/localparam
+  // declarations, and continuous assignment statements.
+  auto group_extractor = [&vstyle](const TokenPartitionRange &range) {
+    return GetConsecutiveModuleItemGroups(range,
+                                          vstyle.alignment_group_boundary);
+  };
+  return ExtractAlignablePartitionGroupsWithBoundary(
+      group_extractor, &IgnoreCommentsAndPreprocessingDirectives, full_range,
+      vstyle);
 }
 
 static std::vector<AlignablePartitionGroup> AlignClassItems(
     const TokenPartitionRange &full_range, const FormatStyle &vstyle) {
   // TODO(fangism): align other class items besides member variables.
-  return ExtractAlignablePartitionGroups(
-      &GetConsecutiveClassItemGroups, &IgnoreCommentsAndPreprocessingDirectives,
-      full_range, vstyle);
+  auto group_extractor = [&vstyle](const TokenPartitionRange &range) {
+    return GetConsecutiveClassItemGroups(range,
+                                         vstyle.alignment_group_boundary);
+  };
+  return ExtractAlignablePartitionGroupsWithBoundary(
+      group_extractor, &IgnoreCommentsAndPreprocessingDirectives, full_range,
+      vstyle);
 }
 
 static std::vector<AlignablePartitionGroup> AlignCaseItems(
@@ -1652,6 +1776,10 @@ static std::vector<AlignablePartitionGroup> AlignEnumItems(
       &IgnoreCommentsAndPreprocessingDirectives, full_range, vstyle);
 }
 
+// Aligns formal parameters in #(...) headers (module/interface/class port
+// parameter lists).  Body-level parameter/localparam declarations are
+// handled by AlignModuleItems which dispatches through
+// GetConsecutiveModuleItemGroups.
 static std::vector<AlignablePartitionGroup> AlignParameterDeclarations(
     const TokenPartitionRange &full_range, const FormatStyle &vstyle) {
   return ExtractAlignablePartitionGroups(
@@ -1662,9 +1790,12 @@ static std::vector<AlignablePartitionGroup> AlignParameterDeclarations(
 
 static std::vector<AlignablePartitionGroup> AlignStatements(
     const TokenPartitionRange &full_range, const FormatStyle &vstyle) {
-  return ExtractAlignablePartitionGroups(
-      &GetAlignableStatementGroups, &IgnoreCommentsAndPreprocessingDirectives,
-      full_range, vstyle);
+  auto group_extractor = [&vstyle](const TokenPartitionRange &range) {
+    return GetAlignableStatementGroups(range, vstyle.alignment_group_boundary);
+  };
+  return ExtractAlignablePartitionGroupsWithBoundary(
+      group_extractor, &IgnoreCommentsAndPreprocessingDirectives, full_range,
+      vstyle);
 }
 
 static std::vector<AlignablePartitionGroup> AlignDistItems(
@@ -1696,8 +1827,11 @@ void TabularAlignTokenPartitions(const FormatStyle &style,
           {NodeEnum::kStructUnionMemberList, &AlignStructUnionMembers},
           {NodeEnum::kActualParameterByNameList, &AlignActualNamedParameters},
           {NodeEnum::kPortActualList, &AlignActualNamedPorts},
+          // module/interface bodies
           {NodeEnum::kModuleItemList, &AlignModuleItems},
           {NodeEnum::kGenerateItemList, &AlignModuleItems},
+          // package bodies
+          {NodeEnum::kPackageItemList, &AlignModuleItems},
           {NodeEnum::kFormalParameterList, &AlignParameterDeclarations},
           {NodeEnum::kClassItems, &AlignClassItems},
           // various case-like constructs:

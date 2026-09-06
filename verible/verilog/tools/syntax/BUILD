@@ -1,6 +1,7 @@
 # 'verilog_syntax' is a program for checking Verilog/SystemVerilog syntax.
 
 load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("//bazel:sh_test_with_runfiles_lib.bzl", "sh_test_with_runfiles_lib")
 load("//bazel:variables.bzl", "STATIC_EXECUTABLES_FEATURE")
 
@@ -37,6 +38,7 @@ cc_binary(
         "//verible/verilog/parser:verilog-token-classifications",
         "//verible/verilog/parser:verilog-token-enum",
         "@abseil-cpp//absl/flags:flag",
+        "@abseil-cpp//absl/log:die_if_null",
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/strings",
         "@nlohmann_json//:singleheader-json",

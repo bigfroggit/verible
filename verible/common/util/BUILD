@@ -22,7 +22,6 @@ cc_library(
     hdrs = ["auto-pop-stack.h"],
     deps = [
         ":logging",
-        "@abseil-cpp//absl/base:core_headers",
     ],
 )
 
@@ -261,6 +260,7 @@ cc_library(
         ":logging",
         ":spacer",
         ":type-traits",
+        "@abseil-cpp//absl/log:die_if_null",
         "@abseil-cpp//absl/strings",
     ],
 )
@@ -537,8 +537,8 @@ cc_test(
     srcs = ["bijective-map_test.cc"],
     deps = [
         ":bijective-map",
-        ":logging",
         "//verible/common/strings:compare",
+        "@abseil-cpp//absl/log:die_if_null",
         "@googletest//:gtest",
         "@googletest//:gtest_main",
     ],

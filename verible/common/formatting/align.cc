@@ -258,7 +258,7 @@ static void ColumnsTreeFormatter(
       if (padding_len > 0) {
         if (lines[level].empty()) {
           lines[level].append(std::string(padding_len, ' '));
-        } else if (padding_len > int(kCellSeparator.size())) {
+        } else if (padding_len > static_cast<int>(kCellSeparator.size())) {
           lines[level].append(absl::StrCat(
               kCellSeparator,
               std::string(padding_len - kCellSeparator.size(), ' ')));
@@ -1373,7 +1373,7 @@ std::vector<TaggedTokenPartitionRange> GetPartitionAlignmentSubranges(
         break;
       }
     }  // switch
-  }    // for
+  }  // for
   // Flush out the last range.
   if (match_count >= min_match_count) {
     result.emplace_back(last_range_start, partitions.end(), last_match_subtype);

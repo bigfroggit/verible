@@ -21,10 +21,10 @@
 #include <initializer_list>
 #include <iterator>
 
+#include "absl/log/die_if_null.h"
 #include "verible/common/text/concrete-syntax-tree.h"
 #include "verible/common/util/auto-pop-stack.h"
 #include "verible/common/util/iterator-adaptors.h"
-#include "verible/common/util/logging.h"
 
 namespace verible {
 
@@ -48,6 +48,7 @@ class SyntaxTreeContext : public AutoPopStack<const SyntaxTreeNode *> {
 
  public:
   // returns the top SyntaxTreeNode of the stack
+  // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method)
   const SyntaxTreeNode &top() const {
     return *ABSL_DIE_IF_NULL(base_type::top());
   }

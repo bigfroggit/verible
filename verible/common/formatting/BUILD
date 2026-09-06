@@ -146,7 +146,6 @@ cc_library(
         "//verible/common/util:tree-operations",
         "//verible/common/util:value-saver",
         "//verible/common/util:vector-tree",
-        "@abseil-cpp//absl/base:config",
         "@abseil-cpp//absl/container:fixed_array",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:vlog_is_on",
@@ -205,6 +204,7 @@ cc_library(
         "//verible/common/util:top-n",
         "//verible/common/util:tree-operations",
         "//verible/common/util:vector-tree",
+        "@abseil-cpp//absl/log:die_if_null",
     ],
 )
 
@@ -322,7 +322,7 @@ cc_test(
         "//verible/common/text:token-info",
         "//verible/common/text:tree-builder-test-util",
         "//verible/common/util:iterator-range",
-        "//verible/common/util:logging",
+        "@abseil-cpp//absl/log:die_if_null",
         "@googletest//:gtest",
         "@googletest//:gtest_main",
     ],
@@ -349,6 +349,7 @@ cc_library(
         "//verible/common/util:tree-operations",
         "//verible/common/util:value-saver",
         "//verible/common/util:vector-tree",
+        "@abseil-cpp//absl/log:die_if_null",
     ],
 )
 
@@ -389,6 +390,7 @@ cc_library(
         "//verible/common/util:iterator-adaptors",
         "//verible/common/util:iterator-range",
         "//verible/common/util:logging",
+        "@abseil-cpp//absl/log:die_if_null",
     ],
 )
 
@@ -417,7 +419,7 @@ cc_test(
         ":unwrapped-line",
         ":unwrapped-line-test-utils",
         "//verible/common/text:token-info",
-        "//verible/common/util:logging",
+        "@abseil-cpp//absl/log:die_if_null",
         "@googletest//:gtest",
         "@googletest//:gtest_main",
     ],

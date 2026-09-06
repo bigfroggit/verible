@@ -75,6 +75,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/log/die_if_null.h"
 #include "verible/common/util/logging.h"
 #include "verible/common/util/spacer.h"
 #include "verible/common/util/type-traits.h"
@@ -163,7 +164,7 @@ auto /* void */ ReserveIfSupported(Container &container,
 
 // No-op candidate used when Container doesn't provide `reserve()` method.
 template <class Container>
-void ReserveIfSupported(Container &, ...) {}
+void ReserveIfSupported(Container &, ...) {}  // NOLINT
 
 }  // namespace tree_operations_internal
 
@@ -173,9 +174,11 @@ void ReserveIfSupported(Container &, ...) {}
 // `TreeNodeTraits<T>` is defined for every class `T` fulfilling the TreeNode
 // concept. It can be used in SFINAE tests.
 template <class Node,  //
-          typename Children_ =
-              tree_operations_internal::TreeNodeChildrenTraits<Node>>
+          typename Children_ = detected_or_t<
+              UnavailableFeatureTraits,
+              tree_operations_internal::TreeNodeChildrenTraits, Node>>
 struct TreeNodeTraits : FeatureTraits {
+  static constexpr bool available = Children_::available;
   using Parent =
       detected_or_t<UnavailableFeatureTraits,
                     tree_operations_internal::TreeNodeParentTraits, Node>;

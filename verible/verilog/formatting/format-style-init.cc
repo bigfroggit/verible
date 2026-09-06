@@ -14,14 +14,58 @@
 
 #include "verible/verilog/formatting/format-style-init.h"
 
+#include <ostream>
+#include <sstream>
+#include <string>
+#include <string_view>
+
 #include "absl/flags/flag.h"
 #include "verible/common/formatting/align.h"
 #include "verible/common/formatting/basic-format-style-init.h"
 #include "verible/common/formatting/basic-format-style.h"
+#include "verible/common/util/enum-flags.h"
 #include "verible/verilog/formatting/format-style.h"
 
 using verible::AlignmentPolicy;
 using verible::IndentationStyle;
+using verilog::formatter::AlignmentGroupBoundary;
+
+// AlignmentGroupBoundary flag support.
+namespace verilog {
+namespace formatter {
+
+static const verible::EnumNameMap<AlignmentGroupBoundary> &
+AlignmentGroupBoundaryNameMap() {
+  static const verible::EnumNameMap<AlignmentGroupBoundary>
+      kAlignmentGroupBoundaryNameMap({
+          {"none", AlignmentGroupBoundary::kNone},
+          {"blank-lines", AlignmentGroupBoundary::kBlankLines},
+          {"separator-comments", AlignmentGroupBoundary::kSeparatorComments},
+          {"blank-lines-and-separator-comments",
+           AlignmentGroupBoundary::kBlankLinesAndSeparatorComments},
+      });
+  return kAlignmentGroupBoundaryNameMap;
+}
+
+std::ostream &operator<<(std::ostream &stream,
+                         AlignmentGroupBoundary boundary) {
+  return AlignmentGroupBoundaryNameMap().Unparse(boundary, stream);
+}
+
+bool AbslParseFlag(std::string_view text, AlignmentGroupBoundary *boundary,
+                   std::string *error) {
+  return AlignmentGroupBoundaryNameMap().Parse(text, boundary, error,
+                                               "AlignmentGroupBoundary");
+}
+
+std::string AbslUnparseFlag(const AlignmentGroupBoundary &boundary) {
+  std::ostringstream stream;
+  stream << boundary;
+  return stream.str();
+}
+
+}  // namespace formatter
+}  // namespace verilog
 
 ABSL_FLAG(bool, try_wrap_long_lines, false,
           "If true, let the formatter attempt to optimize line wrapping "
@@ -61,13 +105,20 @@ ABSL_FLAG(AlignmentPolicy, named_parameter_alignment,
 ABSL_FLAG(AlignmentPolicy, named_port_alignment,
           AlignmentPolicy::kInferUserIntent,
           "Format named port connections: {align,flush-left,preserve,infer}");
-ABSL_FLAG(
-    AlignmentPolicy, module_net_variable_alignment,  //
-    AlignmentPolicy::kInferUserIntent,
-    "Format net/variable declarations: {align,flush-left,preserve,infer}");
+ABSL_FLAG(AlignmentPolicy, module_net_variable_alignment,
+          AlignmentPolicy::kInferUserIntent,
+          "Format net/variable declarations in module, generate, "
+          "interface, and package bodies: {align,flush-left,preserve,infer}");
 ABSL_FLAG(AlignmentPolicy, formal_parameters_alignment,
           AlignmentPolicy::kInferUserIntent,
-          "Format formal parameters: {align,flush-left,preserve,infer}");
+          "Format formal parameters in module/interface/class headers "
+          "(inside #(...)): {align,flush-left,preserve,infer}");
+ABSL_FLAG(AlignmentPolicy, parameter_declaration_alignment,
+          AlignmentPolicy::kInferUserIntent,
+          "Format parameter/localparam declarations in module, generate, "
+          "interface, and package bodies "
+          "(class body parameter declarations are NOT affected): "
+          "{align,flush-left,preserve,infer}");
 ABSL_FLAG(AlignmentPolicy, class_member_variable_alignment,
           AlignmentPolicy::kInferUserIntent,
           "Format class member variables: {align,flush-left,preserve,infer}");
@@ -76,10 +127,11 @@ ABSL_FLAG(AlignmentPolicy, case_items_alignment,
           "Format case items: {align,flush-left,preserve,infer}");
 ABSL_FLAG(AlignmentPolicy, distribution_items_alignment,
           AlignmentPolicy::kInferUserIntent,
-          "Aligh distribution items: {align,flush-left,preserve,infer}");
+          "Align distribution items: {align,flush-left,preserve,infer}");
 ABSL_FLAG(AlignmentPolicy, assignment_statement_alignment,
           AlignmentPolicy::kInferUserIntent,
-          "Format various assignments: {align,flush-left,preserve,infer}");
+          "Format various assignments in module, generate, interface, "
+          "and package bodies: {align,flush-left,preserve,infer}");
 ABSL_FLAG(AlignmentPolicy, enum_assignment_statement_alignment,
           AlignmentPolicy::kInferUserIntent,
           "Format assignments with enums: {align,flush-left,preserve,infer}");
@@ -90,6 +142,12 @@ ABSL_FLAG(bool, compact_indexing_and_selections, true,
 
 ABSL_FLAG(bool, wrap_end_else_clauses, false,
           "Split end and else keywords into separate lines");
+
+ABSL_FLAG(AlignmentGroupBoundary, alignment_group_boundary,
+          AlignmentGroupBoundary::kNone,
+          "Control what breaks alignment groups for module items, statements, "
+          "and class items: {none,blank-lines,separator-comments,"
+          "blank-lines-and-separator-comments}");
 
 ABSL_FLAG(bool, port_declarations_right_align_packed_dimensions, false,
           "If true, packed dimensions in contexts with enabled alignment are "
@@ -126,7 +184,7 @@ void InitializeFromFlags(FormatStyle *style) {
 
 #define STYLE_FROM_FLAG(name) style->name = absl::GetFlag(FLAGS_##name)
 
-  // Simply in the sequence as declared in struct FormatStyle
+  // In the same sequence as declared in struct FormatStyle
   STYLE_FROM_FLAG(port_declarations_indentation);
   STYLE_FROM_FLAG(port_declarations_alignment);
   STYLE_FROM_FLAG(struct_union_members_alignment);
@@ -139,6 +197,7 @@ void InitializeFromFlags(FormatStyle *style) {
   STYLE_FROM_FLAG(enum_assignment_statement_alignment);
   STYLE_FROM_FLAG(formal_parameters_indentation);
   STYLE_FROM_FLAG(formal_parameters_alignment);
+  STYLE_FROM_FLAG(parameter_declaration_alignment);
   STYLE_FROM_FLAG(class_member_variable_alignment);
   STYLE_FROM_FLAG(case_items_alignment);
   STYLE_FROM_FLAG(distribution_items_alignment);
@@ -151,6 +210,7 @@ void InitializeFromFlags(FormatStyle *style) {
   STYLE_FROM_FLAG(expand_coverpoints);
   STYLE_FROM_FLAG(compact_indexing_and_selections);
   STYLE_FROM_FLAG(wrap_end_else_clauses);
+  STYLE_FROM_FLAG(alignment_group_boundary);
 
 #undef STYLE_FROM_FLAG
 }
