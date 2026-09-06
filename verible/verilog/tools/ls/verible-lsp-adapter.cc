@@ -16,8 +16,11 @@
 #include "verible/verilog/tools/ls/verible-lsp-adapter.h"
 
 #include <iterator>
+#include <map>
+#include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "absl/strings/str_cat.h"
@@ -33,7 +36,9 @@
 #include "verible/common/text/tree-utils.h"
 #include "verible/common/util/interval.h"
 #include "verible/verilog/CST/declaration.h"
+#include "verible/verilog/CST/verilog-matchers.h"
 #include "verible/verilog/CST/verilog-nonterminals.h"
+// #include "verible/verilog/analysis/syntax-tree-search.h"
 #include "verible/verilog/analysis/verilog-analyzer.h"
 #include "verible/verilog/analysis/verilog-linter.h"
 #include "verible/verilog/formatting/format-style-init.h"
@@ -87,13 +92,26 @@ static std::vector<verible::lsp::Diagnostic> FindDuplicateInstanceNames(
   for (const auto &match : instances) {
     const auto &instance_node = verible::SymbolCastToNode(*match.match);
     // Get the instance name
-    const verilog::TokenInfo *name_token =
+    const auto *name_token =
         verilog::GetModuleInstanceNameTokenInfoFromGateInstance(instance_node);
     if (!name_token) continue;
 
     // Find the parent scope (kGateInstanceList or similar)
-    const auto *parent = match.context.back();
+    if (match.context.empty()) continue;
+    // Use the nearest scope-defining ancestor as the scope key.
+    const verible::SyntaxTreeNode *parent = nullptr;
+    for (auto it = match.context.rbegin(); it != match.context.rend(); ++it) {
+      const int tag = (*it)->Tag().tag;
+      if (tag == static_cast<int>(NodeEnum::kModuleDeclaration) ||
+          tag == static_cast<int>(NodeEnum::kSeqBlock) ||
+          tag == static_cast<int>(NodeEnum::kGenerateBlock)) {
+        parent = *it;
+        break;
+      }
+    }
     if (!parent) continue;
+
+    scope_instances[parent].emplace_back(name_token->text(), *name_token);
   }
 
   // Check for duplicates within each scope
@@ -103,17 +121,17 @@ static std::vector<verible::lsp::Diagnostic> FindDuplicateInstanceNames(
       if (seen_names.count(name) > 0) {
         // Duplicate found
         const auto range = text.GetRangeForToken(token);
-        diagnostics.push_back(verible::lsp::Diagnostic {
-          .range =
-              {
-                  .start = {.line = range.start.line,
-                            .character = range.start.column},
-                  .end = {.line = range.end.line,
-                          .character = range.end.column},
-              },
-          .severity = verible::lsp::DiagnosticSeverity::kError,
-          .has_severity = true;
-          .message = absl::StrCat("Duplicate instance name: '", name, "'"),
+        diagnostics.push_back(verible::lsp::Diagnostic{
+            .range =
+                {
+                    .start = {.line = range.start.line,
+                              .character = range.start.column},
+                    .end = {.line = range.end.line,
+                            .character = range.end.column},
+                },
+            .severity = verible::lsp::DiagnosticSeverity::kError,
+            .has_severity = true,
+            .message = absl::StrCat("Duplicate instance name: '", name, "'"),
         });
       } else {
         seen_names.insert(name);

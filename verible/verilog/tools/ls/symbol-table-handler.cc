@@ -37,7 +37,6 @@
 #include "absl/strings/str_format.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
-#include "symbol-table-handler.h"
 #include "verible/common/lsp/lsp-file-utils.h"
 #include "verible/common/lsp/lsp-protocol-enums.h"
 #include "verible/common/lsp/lsp-protocol.h"
@@ -752,18 +751,18 @@ void SymbolTableHandler::CollectDefinedSignalsFromNode(
         defined_signals->push_back(&node);
       }
     }
-
-    // Also collect parameters for unused parameter checking
-    if (info.metatype == SymbolMetaType::kParameter) {
-      defined_signals->push_back(&node);
-    }
-
-    // Recursively check child nodes
-    for (const auto &child : node.Children()) {
-      CollectDefinedSignalsFromNode(child.second, defined_signals);
-    }
   }
-};
+
+  // Also collect parameters for unused parameter checking
+  if (info.metatype == SymbolMetaType::kParameter) {
+    defined_signals->push_back(&node);
+  }
+
+  // Recursively check child nodes
+  for (const auto &child : node.Children()) {
+    CollectDefinedSignalsFromNode(child.second, defined_signals);
+  }
+}
 
 bool SymbolTableHandler::IsSignalReferenced(const SymbolTableNode &signal_node,
                                             const SymbolTableNode &root) {
@@ -795,4 +794,5 @@ bool SymbolTableHandler::IsSignalReferenced(const SymbolTableNode &signal_node,
     return false;
   };
   return check_node(root);
-};  // namespace verilog
+}
+}  // namespace verilog
